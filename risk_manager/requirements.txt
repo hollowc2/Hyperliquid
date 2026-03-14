@@ -1,2 +1,3 @@
 #requirements
 schedule
+python-dotenv

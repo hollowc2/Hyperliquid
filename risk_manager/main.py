@@ -1,18 +1,23 @@
+import os
 import urllib.request
 import json
 import time
 import schedule
 
 from urllib.parse import quote
-# https://api.telegram.org/bot<TELEGRAM_TOKEN>/getUpdates
-# Telegram configuration - fill in your details
-TELEGRAM_TOKEN = "your_bot_token_here"  # Your Telegram bot token (e.g., '123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11')
-TELEGRAM_CHAT_ID = "226598796"  # Your Telegram chat ID (e.g., '123456789')
+from dotenv import load_dotenv
+
+load_dotenv()
+
+# Telegram configuration
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+HL_WALLET_ADDRESS = os.getenv("HL_WALLET_ADDRESS")
 
 # Alert threshold configuration
-LIQ_DISTANCE_THRESHOLD = 5.0  # % distance to liquidation for alert
-TOTAL_RISK_THRESHOLD = 1000.0  # Example total risk threshold in USD; adjust as needed
-POSITION_RISK_PERCENT_THRESHOLD = 5.0  # % of withdrawable for per-position risk warning
+LIQ_DISTANCE_THRESHOLD = float(os.getenv("LIQ_DISTANCE_THRESHOLD", 5.0))        # % distance to liquidation for alert
+TOTAL_RISK_THRESHOLD = float(os.getenv("TOTAL_RISK_THRESHOLD", 1000.0))          # USD
+POSITION_RISK_PERCENT_THRESHOLD = float(os.getenv("POSITION_RISK_PERCENT_THRESHOLD", 5.0))  # % of withdrawable
 
 def post_info_request(payload):
     """
@@ -188,8 +193,7 @@ def check_and_alert(user_address):
     if alerts:
         send_telegram_alert("\n".join(alerts))
 
-# Example usage - replace with your address
-address = "0xB4A17Df60f201C53A8e011B9152c7075C851f5c5"  # Your Hyperliquid wallet address
+address = HL_WALLET_ADDRESS
 
 # Run once immediately
 check_and_alert(address)
