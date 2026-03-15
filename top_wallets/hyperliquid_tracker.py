@@ -2,6 +2,10 @@ import time
 import logging
 import json
 import os
+import select
+import sys
+import termios
+import tty
 import websocket
 import threading
 import requests
@@ -132,7 +136,10 @@ def fmt_perp_positions(positions: list) -> str:
 
 
 def build_table(lb_data, status: str = ""):
-    title = f"🏆 Hyperliquid Top 10   {status}" if status else "🏆 Hyperliquid Top 10"
+    perps_on = show_perps.is_set()
+    perp_hint = "[dim][p] hide perps[/dim]" if perps_on else "[dim][p] show perps[/dim]"
+    hint_sep = "   "
+    title = f"🏆 Hyperliquid Top 10{hint_sep}{perp_hint}" + (f"   {status}" if status else "")
     table = Table(title=title, style="bold cyan", expand=True)
     table.add_column("#", justify="center", style="dim", width=3)
     table.add_column("Username", min_width=14)
@@ -140,7 +147,8 @@ def build_table(lb_data, status: str = ""):
     table.add_column("30d PnL", justify="right", min_width=10)
     table.add_column("Acct Value", justify="right", min_width=10)
     table.add_column("Lifetime PnL", justify="right", min_width=12)
-    table.add_column("Open Perps", min_width=24)
+    if perps_on:
+        table.add_column("Open Perps", min_width=24)
     table.add_column("Spot / USDC", min_width=18)
 
     for i, entry in enumerate(lb_data[:10], start=1):
@@ -150,9 +158,12 @@ def build_table(lb_data, status: str = ""):
         pnl      = fmt_pnl(float(performances.get('month',   {}).get('pnl', '0')))
         acct     = fmt_usd(float(entry.get('accountValue', '0')))
         lifetime = fmt_pnl(float(performances.get('allTime', {}).get('pnl', '0')))
-        perps    = fmt_perp_positions(entry.get('perp_positions', []))
         holdings = entry.get('holdings', '—')
-        table.add_row(str(i), username, volume, pnl, acct, lifetime, perps, holdings)
+        if perps_on:
+            perps = fmt_perp_positions(entry.get('perp_positions', []))
+            table.add_row(str(i), username, volume, pnl, acct, lifetime, perps, holdings)
+        else:
+            table.add_row(str(i), username, volume, pnl, acct, lifetime, holdings)
 
     return table
 
@@ -199,9 +210,35 @@ def print_startup_fills(lb_data: list):
     console.print()
 
 
-# ── WebSocket ──────────────────────────────────────────────────────────────────
+# ── Keyboard ───────────────────────────────────────────────────────────────────
 
 shutdown_event = threading.Event()
+show_perps = threading.Event()
+show_perps.set()  # visible by default
+
+
+def keyboard_listener():
+    """Background thread: press 'p' to toggle perp column, 'q'/Ctrl-C to quit."""
+    fd = sys.stdin.fileno()
+    old = termios.tcgetattr(fd)
+    try:
+        tty.setraw(fd)
+        while not shutdown_event.is_set():
+            r, _, _ = select.select([sys.stdin], [], [], 0.5)
+            if r:
+                ch = sys.stdin.read(1)
+                if ch == 'p':
+                    if show_perps.is_set():
+                        show_perps.clear()
+                    else:
+                        show_perps.set()
+                elif ch in ('q', '\x03'):  # q or Ctrl-C
+                    shutdown_event.set()
+                    break
+    except Exception:
+        pass
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
 
 def ws_thread(top_accounts_shared):
@@ -327,6 +364,8 @@ def main():
     top_accounts_shared = {}
     ws_t = threading.Thread(target=ws_thread, args=(top_accounts_shared,), daemon=True)
     ws_t.start()
+    kb_t = threading.Thread(target=keyboard_listener, daemon=True)
+    kb_t.start()
 
     # Load and display cache immediately
     cache, saved_at = load_cache()
