@@ -230,7 +230,7 @@ class HyperliquidTracker(App):
         # Summary table columns
         dt = self.query_one("#summary", DataTable)
         dt.add_column("#",            key="rank",     width=4)
-        dt.add_column("Username",     key="username", width=22)
+        dt.add_column("Username",     key="username", width=44)
         dt.add_column("All-Time Vol", key="vol",      width=14)
         dt.add_column("30d PnL",      key="pnl_30d",  width=12)
         dt.add_column("Acct Value",   key="acct",     width=12)
@@ -284,7 +284,7 @@ class HyperliquidTracker(App):
             if not address:
                 continue
             username = (entry.get("displayName") or
-                        f"{entry['ethAddress'][:8]}…{entry['ethAddress'][-6:]}")
+                        entry['ethAddress'])
             top_accounts[address] = {'username': username, 'rank': i + 1}
 
             remaining = 9 - i
@@ -340,7 +340,7 @@ class HyperliquidTracker(App):
     def _summary_row(self, rank: int, entry: dict) -> tuple:
         perf     = {p[0]: p[1] for p in entry.get("windowPerformances", [])}
         username = (entry.get("displayName") or
-                    f"{entry.get('ethAddress','N/A')[:8]}…{entry.get('ethAddress','N/A')[-6:]}")
+                    entry.get('ethAddress', 'N/A'))
         vol      = fmt_usd(float(perf.get('allTime', {}).get('vlm', '0')))
         pnl_30d  = fmt_pnl(float(perf.get('month',   {}).get('pnl', '0')))
         acct     = fmt_usd(float(entry.get('accountValue', '0')))
@@ -378,7 +378,7 @@ class HyperliquidTracker(App):
     def _update_perp_header(self, entry: dict) -> None:
         """Update the one-line stat strip above the perp table."""
         username  = (entry.get("displayName") or
-                     f"{entry.get('ethAddress','N/A')[:8]}…{entry.get('ethAddress','N/A')[-6:]}")
+                     entry.get('ethAddress', 'N/A'))
         positions = [p for p in entry.get('perp_positions', [])
                      if p['notional'] >= MIN_PERP_NOTIONAL]
         if not positions:
