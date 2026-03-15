@@ -1,20 +1,14 @@
 """
-Moon Dev's HLP Dashboard - Complete HyperLiquidity Provider Analysis
-=====================================================================
-Beautiful terminal dashboard for all HLP data: positions, trades, liquidators, deltas
-
-Built with love by Moon Dev
+HLP Dashboard — HyperLiquidity Provider positions, trades, liquidators, and delta tracking.
 
 HLP is Hyperliquid's native market-making protocol with ~$210M+ in positions.
-This dashboard shows all 7 HLP strategies, trade history, liquidator events, and exposure tracking.
+Shows all 7 HLP strategies, trade history, liquidator events, and exposure tracking.
 
 Usage: python 12_hlp_positions.py [mode]
        python 12_hlp_positions.py              # Full dashboard (all sections)
        python 12_hlp_positions.py --positions  # Positions only
        python 12_hlp_positions.py --trades     # Trade history only
        python 12_hlp_positions.py --summary    # Quick summary only
-
-Data Source: Moon Dev's local Hyperliquid node (blazing fast!)
 """
 
 import sys
@@ -24,7 +18,7 @@ from collections import defaultdict
 
 # Add parent directory to path to import api.py
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from api import MoonDevAPI
+from api import HyperliquidPublicAPI
 
 from rich.console import Console
 from rich.table import Table
@@ -36,30 +30,6 @@ from rich.align import Align
 from rich.tree import Tree
 
 console = Console()
-
-# ==================== BANNER ====================
-def create_banner():
-    """Create the Moon Dev branded header banner"""
-    banner = """
- _   _ _     ____
-| | | | |   |  _ \\
-| |_| | |   | |_) |
-|  _  | |___|  __/
-|_| |_|_____|_|
- ____    _    ____  _   _ ____   ___    _    ____  ____
-|  _ \\  / \\  / ___|| | | | __ ) / _ \\  / \\  |  _ \\|  _ \\
-| | | |/ _ \\ \\___ \\| |_| |  _ \\| | | |/ _ \\ | |_) | | | |
-| |_| / ___ \\ ___) |  _  | |_) | |_| / ___ \\|  _ <| |_| |
-|____/_/   \\_\\____/|_| |_|____/ \\___/_/   \\_\\_| \\_\\____/
-"""
-    return Panel(
-        Align.center(Text(banner, style="bold cyan")),
-        title="[bold magenta]MOON DEV'S HLP REVERSE ENGINEERING DASHBOARD[/bold magenta]",
-        subtitle="[dim]All 7 HLP Strategies | Trades | Liquidators | Delta Tracking | ~$210M+ AUM[/dim]",
-        border_style="bright_cyan",
-        box=box.DOUBLE_EDGE,
-        padding=(0, 1)
-    )
 
 
 # ==================== HELPER FUNCTIONS ====================
@@ -139,7 +109,7 @@ def display_summary_panels(summary, exposure=None, trade_stats=None, strategies=
 
     panel1 = Panel(
         Align.center("\n".join(panel1_lines)),
-        title="[bold white]HLP OVERVIEW[/bold white]",
+        title="[bold white]HLP Overview[/bold white]",
         border_style="bright_yellow",
         box=box.DOUBLE,
         padding=(1, 2)
@@ -160,7 +130,7 @@ def display_summary_panels(summary, exposure=None, trade_stats=None, strategies=
 
     panel2 = Panel(
         Align.center("\n".join(panel2_lines)),
-        title="[bold white]NET EXPOSURE[/bold white]",
+        title="[bold white]Net Exposure[/bold white]",
         border_style=f"bright_{exposure_color}",
         box=box.DOUBLE,
         padding=(1, 2)
@@ -201,7 +171,7 @@ def display_summary_panels(summary, exposure=None, trade_stats=None, strategies=
 
     panel3 = Panel(
         "\n".join(panel3_lines),
-        title="[bold white]TRADES[/bold white]" if trade_stats else "[bold white]STRATEGIES[/bold white]",
+        title="[bold white]Trades[/bold white]" if trade_stats else "[bold white]Strategies[/bold white]",
         border_style="bright_magenta",
         box=box.DOUBLE,
         padding=(1, 2)
@@ -267,7 +237,7 @@ def display_combined_positions(combined_positions):
 
     # Header with totals
     delta_color = "green" if net_delta >= 0 else "red"
-    header = f"[bold cyan]TOP 15 NET POSITIONS[/bold cyan] │ [green]Long: {format_usd(total_long)}[/green] │ [red]Short: {format_usd(total_short)}[/red] │ [{delta_color}]Delta: {'+' if net_delta >= 0 else ''}{format_usd(net_delta)}[/{delta_color}]"
+    header = f"[bold cyan]Top 15 Net Positions[/bold cyan] │ [green]Long: {format_usd(total_long)}[/green] │ [red]Short: {format_usd(total_short)}[/red] │ [{delta_color}]Delta: {'+' if net_delta >= 0 else ''}{format_usd(net_delta)}[/{delta_color}]"
     console.print(Panel(table, title=header, border_style="cyan", padding=(0, 0)))
 
 
@@ -307,7 +277,7 @@ def display_hlp_trades(trades, limit=15):
 
         table.add_row(time_str, strategy, coin, side_text, format_usd(value))
 
-    console.print(Panel(table, title=f"[bold yellow]RECENT TRADES[/bold yellow] ({min(len(trades), limit)})", border_style="yellow", padding=(0, 0)))
+    console.print(Panel(table, title=f"[bold yellow]Recent Trades[/bold yellow] ({min(len(trades), limit)})", border_style="yellow", padding=(0, 0)))
 
 
 def display_trade_stats(trade_stats):
@@ -345,7 +315,7 @@ def display_trade_stats(trade_stats):
                 vol = item.get('volume', 0)
                 strat_parts.append(f"[cyan]{strat}[/cyan] {format_usd(vol)}")
 
-    header = f"[bold]TRADES[/bold] │ {total_trades:,} trades │ {format_usd(total_volume)} volume │ {first} to {last}"
+    header = f"[bold]Trades[/bold] │ {total_trades:,} trades │ {format_usd(total_volume)} volume │ {first} to {last}"
     content = " │ ".join(strat_parts) if strat_parts else "[dim]No strategy breakdown[/dim]"
 
     console.print(Panel(content, title=header, border_style="green", padding=(0, 1)))
@@ -370,7 +340,7 @@ def display_liquidators(liquidators_data):
     event_count = len(events)
     event_str = f" │ [yellow]{event_count} events[/yellow]" if event_count > 0 else ""
 
-    console.print(f"[bold red]LIQUIDATORS[/bold red] {' │ '.join(liq_parts)}{event_str}")
+    console.print(f"[bold red]Liquidators[/bold red] {' │ '.join(liq_parts)}{event_str}")
 
 
 def display_deltas(deltas_data):
@@ -379,7 +349,7 @@ def display_deltas(deltas_data):
         return
 
     current = deltas_data.get('current', 0)
-    change_24h = deltas_data.get('change_24h', 0)
+    change_24h = deltas_data.get('change_24h') or 0
     deltas = deltas_data.get('deltas', [])
 
     current_color = "green" if current >= 0 else "red"
@@ -405,7 +375,7 @@ def display_deltas(deltas_data):
             idx = int((v - min_val) / range_val * 8)
             sparkline += f"[{'green' if v >= 0 else 'red'}]{chars[idx]}[/]"
 
-    console.print(f"[bold magenta]24H DELTA[/bold magenta] [{current_color}]Now: {format_usd(current)}[/{current_color}] │ [{change_color}]Chg: {'+' if change_24h >= 0 else ''}{format_usd(change_24h)}[/{change_color}] │ {sparkline}")
+    console.print(f"[bold magenta]24H Delta[/bold magenta] [{current_color}]Now: {format_usd(current)}[/{current_color}] │ [{change_color}]Chg: {'+' if change_24h >= 0 else ''}{format_usd(change_24h)}[/{change_color}] │ {sparkline}")
 
 
 def display_exposure_visualization(combined_positions):
@@ -521,19 +491,10 @@ def display_strategy_details(strategies):
         console.print(f"[dim]Idle:[/dim] " + " │ ".join(idle_parts))
 
 
-# ==================== FOOTER ====================
-def print_footer():
-    """Print footer with timestamp and branding"""
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    console.print(f"\n[dim cyan]{'─' * 100}[/dim cyan]")
-    console.print(f"[dim cyan]Moon Dev's HLP Dashboard | {now} | api.moondev.com | Built with love by Moon Dev[/dim cyan]")
-
-
 # ==================== MAIN ====================
 def main():
-    """Main function - Moon Dev's HLP Dashboard"""
-    console.clear()
-    console.print(create_banner())
+    """HLP dashboard entry point"""
+    console.rule("[bold]HLP Positions[/bold]")
 
     # Parse command line args
     args = sys.argv[1:]
@@ -545,27 +506,15 @@ def main():
     elif "--summary" in args:
         mode = "summary"
 
-    console.print(f"[bold cyan]Moon Dev: Fetching HLP data from local node...[/bold cyan]")
+    console.print(f"[bold cyan]Fetching HLP data from Hyperliquid public API...[/bold cyan]")
     console.print(f"[dim]Mode: {mode}[/dim]")
     console.print()
 
     # Initialize API
-    api = MoonDevAPI()
-
-    if not api.api_key:
-        console.print(Panel(
-            "[bold red]ERROR: No API key found![/bold red]\n"
-            "Please set MOONDEV_API_KEY in your .env file\n"
-            "[dim]MOONDEV_API_KEY=your_key_here[/dim]\n\n"
-            "Get your API key at: [link=https://moondev.com]https://moondev.com[/link]",
-            border_style="red",
-            title="Authentication Required",
-            padding=(0, 1)
-        ))
-        return
+    api = HyperliquidPublicAPI()
 
     # Fetch data based on mode
-    with console.status("[bold cyan]Moon Dev: Loading HLP data...[/bold cyan]"):
+    with console.status("[bold cyan]Loading HLP data...[/bold cyan]"):
         hlp_data = api.get_hlp_positions(include_strategies=(mode in ["full", "positions"]))
         trade_stats = None
         trades = None
@@ -661,7 +610,7 @@ def main():
         if strategies:
             display_strategy_details(strategies)
 
-    print_footer()
+    console.print(f"[dim]{datetime.now():%Y-%m-%d %H:%M:%S}[/dim]")
 
 
 if __name__ == "__main__":

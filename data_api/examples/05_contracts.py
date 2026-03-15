@@ -1,17 +1,6 @@
 #!/usr/bin/env python3
 """
-🌙 Moon Dev's Contract Registry Dashboard
-==========================================
-Developer Porn Terminal Dashboard - Gorgeous contract data visualization
-
-Built with love by Moon Dev 🚀
-https://moondev.com
-
-This script displays:
-- Contract registry with metadata
-- High-value contracts highlighted
-- Contract types with color coding
-- Activity tracking information
+Contract Registry — Hyperliquid contract metadata and high-value contract tracking.
 """
 
 import sys
@@ -20,7 +9,7 @@ from datetime import datetime
 
 # Add parent directory to path for api import
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from api import MoonDevAPI
+from api import HyperliquidPublicAPI
 
 from rich.console import Console
 from rich.table import Table
@@ -33,7 +22,7 @@ from rich import box
 # Initialize Rich console
 console = Console()
 
-# Contract type colors - Moon Dev's custom palette
+# Contract type colors
 TYPE_COLORS = {
     "system": "bright_cyan",
     "trading": "bright_green",
@@ -49,7 +38,7 @@ TYPE_COLORS = {
 
 
 def get_type_color(contract_type: str) -> str:
-    """Get color for contract type - Moon Dev's color scheme"""
+    """Get color for contract type"""
     if not contract_type:
         return TYPE_COLORS["default"]
     contract_type = contract_type.lower()
@@ -59,27 +48,8 @@ def get_type_color(contract_type: str) -> str:
     return TYPE_COLORS["default"]
 
 
-def create_header() -> Panel:
-    """Create the Moon Dev branded header - Developer Porn style"""
-    banner = """    ███╗   ███╗ ██████╗  ██████╗ ███╗   ██╗    ██████╗ ███████╗██╗   ██╗
-    ████╗ ████║██╔═══██╗██╔═══██╗████╗  ██║    ██╔══██╗██╔════╝██║   ██║
-    ██╔████╔██║██║   ██║██║   ██║██╔██╗ ██║    ██║  ██║█████╗  ██║   ██║
-    ██║╚██╔╝██║██║   ██║██║   ██║██║╚██╗██║    ██║  ██║██╔══╝  ╚██╗ ██╔╝
-    ██║ ╚═╝ ██║╚██████╔╝╚██████╔╝██║ ╚████║    ██████╔╝███████╗ ╚████╔╝
-    ╚═╝     ╚═╝ ╚═════╝  ╚═════╝ ╚═╝  ╚═══╝    ╚═════╝ ╚══════╝  ╚═══╝"""
-    from rich.align import Align
-    return Panel(
-        Align.center(Text(banner, style="bold cyan")),
-        title="🌙 [bold magenta]CONTRACT REGISTRY[/bold magenta] 🌙",
-        subtitle="[dim]📜 High-value contract tracking by Moon Dev 📜[/dim]",
-        border_style="bright_cyan",
-        box=box.DOUBLE_EDGE,
-        padding=(0, 1)
-    )
-
-
 def create_stats_panel(contracts_data: dict) -> Panel:
-    """Create statistics panel - Moon Dev metrics"""
+    """Create statistics panel"""
     contracts = contracts_data.get('contracts', [])
     high_value_count = contracts_data.get('high_value_count', 0)
     active_count = sum(1 for c in contracts if c.get('is_active', c.get('active', False)))
@@ -113,9 +83,9 @@ def create_stats_panel(contracts_data: dict) -> Panel:
 
 
 def create_type_legend() -> Panel:
-    """Create contract type legend - Moon Dev color guide"""
+    """Create contract type legend"""
     legend_text = Text()
-    legend_text.append("🎨 CONTRACT TYPES: ", style="bold white")
+    legend_text.append("CONTRACT TYPES: ", style="bold white")
 
     type_icons = {
         "system": "⚙️",
@@ -147,12 +117,12 @@ def create_type_legend() -> Panel:
 
 
 def create_contracts_table(contracts_data: dict) -> Table:
-    """Create the main contracts table - Moon Dev's signature style"""
+    """Create the main contracts table"""
     table = Table(
         box=box.ROUNDED,
         border_style="bright_cyan",
         header_style="bold bright_magenta",
-        title="[bold bright_yellow]🌙 Moon Dev Contract Registry[/bold bright_yellow]",
+        title="[bold bright_yellow]Contract Registry[/bold bright_yellow]",
         title_style="bold",
         padding=(0, 1)
     )
@@ -215,7 +185,7 @@ def create_contracts_table(contracts_data: dict) -> Table:
 
 
 def create_high_value_panel(contracts_data: dict) -> Panel:
-    """Create high-value contracts highlight panel - Moon Dev VIP section"""
+    """Create high-value contracts highlight panel"""
     contracts = contracts_data.get('contracts', [])
     high_value_contracts = [c for c in contracts if c.get('is_high_value', c.get('high_value', False))]
 
@@ -239,45 +209,34 @@ def create_high_value_panel(contracts_data: dict) -> Panel:
         content,
         box=box.ROUNDED,
         border_style="bright_yellow",
-        title="[bold bright_yellow]⭐ HIGH VALUE CONTRACTS[/bold bright_yellow]",
+        title="[bold bright_yellow]⭐ High Value Contracts[/bold bright_yellow]",
         padding=(0, 1)
     )
 
 
-def create_footer() -> str:
-    """Create footer with timestamp - Moon Dev signature"""
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    return f"[dim]─── 🕐 {timestamp} │ 🌙 Moon Dev │ moondev.com ───[/dim]"
-
-
 def main():
-    """Main function - Moon Dev's Contract Dashboard"""
-    console.clear()
-    console.print(create_header())
+    """Contract registry entry point"""
+    console.rule("[bold]Contract Registry[/bold]")
 
-    # Initialize API
-    console.print("[dim]🔌 Moon Dev: Connecting to API...[/dim]")
-    api = MoonDevAPI()
+    console.print("[dim]Connecting to Hyperliquid public API...[/dim]")
+    api = HyperliquidPublicAPI()
+    console.print("[dim]Connected (no key required)[/dim]")
+    console.print("[dim]Fetching contract registry...[/dim]")
 
-    if not api.api_key:
+    try:
+        contracts_data = api.get_contracts()
+    except NotImplementedError as e:
         console.print(Panel(
-            "[bold red]❌ No API key found![/bold red]\n"
-            "[dim]Set MOONDEV_API_KEY in your .env file[/dim]\n"
-            "[cyan]Visit https://moondev.com to get your API key[/cyan]",
-            border_style="red",
-            title="🔐 Authentication Error",
+            f"[yellow]ℹ️  {e}[/yellow]",
+            border_style="yellow",
+            title="[yellow]Contract Registry Unavailable[/yellow]",
             padding=(0, 1)
         ))
         return
 
-    console.print(f"[dim]✅ Moon Dev: API Key loaded (ends with ...{api.api_key[-4:]})[/dim]")
-    console.print("[bright_cyan]📡 Moon Dev: Fetching contract registry...[/bright_cyan]")
-
-    contracts_data = api.get_contracts()
-
     if not contracts_data:
         console.print(Panel(
-            "[bold red]❌ No contract data returned from API[/bold red]",
+            "[bold red]No contract data returned from API[/bold red]",
             border_style="red",
             title="📜 Data Error",
             padding=(0, 1)
@@ -288,8 +247,7 @@ def main():
     console.print(create_type_legend())
     console.print(create_high_value_panel(contracts_data))
     console.print(create_contracts_table(contracts_data))
-    console.print(create_footer())
-    console.print("[bold bright_green]✅ Moon Dev: Contract Registry Dashboard Complete![/bold bright_green]")
+    console.print(f"[dim]{datetime.now():%Y-%m-%d %H:%M:%S}[/dim]")
 
 
 if __name__ == "__main__":

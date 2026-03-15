@@ -1,12 +1,6 @@
 #!/usr/bin/env python3
 """
-🌙 Moon Dev's Blockchain Events Dashboard
-==========================================
-Beautiful terminal visualization of real-time blockchain events
-Built with love by Moon Dev 🚀
-
-Usage:
-    python API_examples/04_events.py
+Blockchain Events — Real-time blockchain event visualization.
 """
 
 import sys
@@ -16,7 +10,7 @@ from datetime import datetime
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from api import MoonDevAPI
+from api import HyperliquidPublicAPI
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
@@ -24,10 +18,6 @@ from rich.text import Text
 from rich import box
 from rich.align import Align
 from rich.columns import Columns
-
-# =============================================================================
-# 🌙 Moon Dev's Events Dashboard - Developer Porn Edition
-# =============================================================================
 
 console = Console()
 
@@ -64,24 +54,6 @@ EVENT_EMOJIS = {
 }
 
 
-def create_banner():
-    """Create the Moon Dev header banner"""
-    banner = """███╗   ███╗ ██████╗  ██████╗ ███╗   ██╗    ██████╗ ███████╗██╗   ██╗
-████╗ ████║██╔═══██╗██╔═══██╗████╗  ██║    ██╔══██╗██╔════╝██║   ██║
-██╔████╔██║██║   ██║██║   ██║██╔██╗ ██║    ██║  ██║█████╗  ██║   ██║
-██║╚██╔╝██║██║   ██║██║   ██║██║╚██╗██║    ██║  ██║██╔══╝  ╚██╗ ██╔╝
-██║ ╚═╝ ██║╚██████╔╝╚██████╔╝██║ ╚████║    ██████╔╝███████╗ ╚████╔╝
-╚═╝     ╚═╝ ╚═════╝  ╚═════╝ ╚═╝  ╚═══╝    ╚═════╝ ╚══════╝  ╚═══╝"""
-    return Panel(
-        Align.center(Text(banner, style="bold cyan")),
-        title="🌙 [bold magenta]BLOCKCHAIN EVENTS DASHBOARD[/bold magenta] 🌙",
-        subtitle="[dim]⚡ Real-time event monitoring by Moon Dev ⚡[/dim]",
-        border_style="bright_cyan",
-        box=box.DOUBLE_EDGE,
-        padding=(0, 1)
-    )
-
-
 def create_big_number(number, label, color="cyan"):
     """Create a big number display"""
     formatted = f"{number:,}" if isinstance(number, int) else str(number)
@@ -107,9 +79,9 @@ def create_bar(value, max_value, width=30, color="cyan"):
 
 
 def create_events_by_type_table(events_by_type):
-    """Create a beautiful table showing events by type with bar chart"""
+    """Create a table showing events by type with bar chart"""
     table = Table(
-        title="⚡ [bold cyan]Events by Type[/bold cyan] ⚡",
+        title="⚡ [bold cyan]Events by Type[/bold cyan]",
         box=box.ROUNDED,
         border_style="cyan",
         header_style="bold magenta",
@@ -151,22 +123,18 @@ def create_stats_panel(stats, large_transfers, large_swaps):
     """Create a panel with key statistics"""
     total_events = stats.get('total_events', 0)
     stats_text = Text()
-    stats_text.append("🎯 ", style="bold")
-    stats_text.append("TOTAL EVENTS: ", style="bold white")
+    stats_text.append("Total Events: ", style="bold white")
     stats_text.append(f"{total_events:,}\n", style="bold cyan")
-    stats_text.append("🔄 ", style="bold")
-    stats_text.append("Large Transfers: ", style="bold white")
+    stats_text.append("🔄 Large Transfers: ", style="bold white")
     stats_text.append(f"{large_transfers:,}\n", style="bold green")
-    stats_text.append("💱 ", style="bold")
-    stats_text.append("Large Swaps: ", style="bold white")
+    stats_text.append("💱 Large Swaps: ", style="bold white")
     stats_text.append(f"{large_swaps:,}", style="bold magenta")
     if 'events_per_minute' in stats:
-        stats_text.append("\n⚡ ", style="bold")
-        stats_text.append("Events/min: ", style="bold white")
+        stats_text.append("\n⚡ Events/min: ", style="bold white")
         stats_text.append(f"{stats['events_per_minute']:.1f}", style="bold yellow")
     return Panel(
         stats_text,
-        title="📊 [bold yellow]Key Metrics[/bold yellow] 📊",
+        title="📊 Key Metrics",
         border_style="yellow",
         box=box.ROUNDED,
         padding=(0, 1)
@@ -176,7 +144,7 @@ def create_stats_panel(stats, large_transfers, large_swaps):
 def create_recent_events_table(events_list):
     """Create a table of recent events"""
     table = Table(
-        title="🔥 [bold red]Recent Events[/bold red] 🔥",
+        title="Recent Events",
         box=box.ROUNDED,
         border_style="red",
         header_style="bold yellow",
@@ -202,7 +170,6 @@ def create_recent_events_table(events_list):
         from_addr = event.get('from', event.get('from_address', 'N/A'))
         to_addr = event.get('to', event.get('to_address', 'N/A'))
 
-        # Show FULL addresses - Moon Dev says the full address is the main event!
         from_display = str(from_addr)
         to_display = str(to_addr)
 
@@ -243,7 +210,7 @@ def create_event_type_bars(events_by_type):
     content = "\n".join(lines)
     return Panel(
         content,
-        title="📊 [bold blue]Event Type Distribution[/bold blue] 📊",
+        title="📊 Event Type Distribution",
         border_style="blue",
         box=box.ROUNDED,
         padding=(0, 1)
@@ -251,25 +218,22 @@ def create_event_type_bars(events_by_type):
 
 
 def main():
-    """Main dashboard function - Moon Dev style!"""
-    console.clear()
-    console.print(create_banner())
-    console.print("[bold cyan]🌙 Moon Dev[/bold cyan]: Initializing API connection...", style="dim")
-    api = MoonDevAPI()
-    if not api.api_key:
+    """Blockchain events entry point"""
+    console.rule("[bold]Blockchain Events[/bold]")
+    console.print("[dim]Connecting to Hyperliquid public API...[/dim]")
+    api = HyperliquidPublicAPI()
+    console.print("[bold green]Connected (no key required)[/bold green]")
+    console.print("[dim]Fetching blockchain events...[/dim]")
+    try:
+        events_data = api.get_events()
+    except NotImplementedError as e:
         console.print(Panel(
-            "[bold red]❌ No API key found![/bold red]\n"
-            "Set MOONDEV_API_KEY in your .env file:\n"
-            "[dim]echo 'MOONDEV_API_KEY=your_key' >> .env[/dim]",
-            title="⚠️ Authentication Error",
-            border_style="red",
-            padding=(0, 1)
+            f"[yellow]ℹ️  {e}[/yellow]",
+            title="[yellow]Blockchain Events Unavailable[/yellow]",
+            border_style="yellow", padding=(0, 1)
         ))
         return
-    console.print(f"[bold green]✅ API Key loaded[/bold green] [dim](ends with ...{api.api_key[-4:]})[/dim]")
-    console.print("[bold cyan]🌙 Moon Dev[/bold cyan]: Fetching blockchain events...", style="dim")
-    events_data = api.get_events()
-    console.print("[bold green]✅ Data received![/bold green]")
+    console.print("[bold green]Data received.[/bold green]")
 
     # Parse the response
     stats = {}
@@ -299,7 +263,7 @@ def main():
 
     total_events = stats.get('total_events', sum(events_by_type.values()) if events_by_type else len(events_list))
 
-    console.print(create_big_number(total_events, "⚡ TOTAL BLOCKCHAIN EVENTS ⚡", "cyan"))
+    console.print(create_big_number(total_events, "Total Blockchain Events", "cyan"))
     stats_panel = create_stats_panel(stats, large_transfers, large_swaps)
     bar_chart = create_event_type_bars(events_by_type)
     console.print(Columns([stats_panel, bar_chart], equal=True, expand=True))
@@ -307,9 +271,7 @@ def main():
     if events_list:
         console.print(create_recent_events_table(events_list))
 
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    console.print(f"[dim]─── 🌙 Moon Dev | {now} | moondev.com ───[/dim]", justify="center")
-    console.print("[bold cyan]🌙 Moon Dev[/bold cyan]: Dashboard complete! Stay based, Dr. Data Dawg! 🚀", style="bold")
+    console.print(f"[dim]{datetime.now():%Y-%m-%d %H:%M:%S}[/dim]")
 
 
 if __name__ == "__main__":

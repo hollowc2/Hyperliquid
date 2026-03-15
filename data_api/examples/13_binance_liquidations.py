@@ -1,6 +1,5 @@
 """
-🌙 Moon Dev's Binance Liquidation Dashboard - Beautiful Terminal Dashboard for Binance Futures Liquidations
-Built with love by Moon Dev 🚀 | Run with: python -m api_examples.13_binance_liquidations
+Binance Liquidations — Binance futures liquidation data across timeframes.
 """
 
 import sys
@@ -9,7 +8,7 @@ import os
 # Add parent directory to path for importing api.py
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from api import MoonDevAPI
+from api import HyperliquidPublicAPI
 from datetime import datetime
 from rich.console import Console
 from rich.table import Table
@@ -22,23 +21,6 @@ from rich import box
 # Initialize Rich console
 console = Console()
 
-# ==================== BANNER ====================
-def print_banner():
-    """Print the Moon Dev banner"""
-    banner = """███╗   ███╗ ██████╗  ██████╗ ███╗   ██╗    ██████╗ ███████╗██╗   ██╗
-████╗ ████║██╔═══██╗██╔═══██╗████╗  ██║    ██╔══██╗██╔════╝██║   ██║
-██╔████╔██║██║   ██║██║   ██║██╔██╗ ██║    ██║  ██║█████╗  ██║   ██║
-██║╚██╔╝██║██║   ██║██║   ██║██║╚██╗██║    ██║  ██║██╔══╝  ╚██╗ ██╔╝
-██║ ╚═╝ ██║╚██████╔╝╚██████╔╝██║ ╚████║    ██████╔╝███████╗ ╚████╔╝
-╚═╝     ╚═╝ ╚═════╝  ╚═════╝ ╚═╝  ╚═══╝    ╚═════╝ ╚══════╝  ╚═══╝"""
-    console.print(Panel(
-        Align.center(Text(banner, style="bold cyan")),
-        title="🔥 [bold yellow]BINANCE LIQUIDATION DASHBOARD[/bold yellow] 🔥",
-        subtitle="[dim]💥 Binance Futures Liquidation Intelligence by Moon Dev 💥[/dim]",
-        border_style="yellow",
-        box=box.DOUBLE_EDGE,
-        padding=(0, 1)
-    ))
 
 # ==================== HELPER FUNCTIONS ====================
 def format_usd(value):
@@ -60,7 +42,7 @@ def format_address(address):
 # ==================== BINANCE LIQUIDATION STATS ====================
 def display_binance_stats(api):
     """Display aggregated Binance liquidation statistics"""
-    console.print(Panel("📊 [bold yellow]BINANCE LIQUIDATION STATISTICS[/bold yellow] 📊", border_style="yellow", padding=(0, 1)))
+    console.print(Panel("📊 Binance Liquidation Stats", border_style="yellow", padding=(0, 1)))
     try:
         stats = api.get_binance_liquidation_stats()
         if isinstance(stats, dict):
@@ -70,7 +52,7 @@ def display_binance_stats(api):
             total_count = stats.get('total_count', stats.get('count', 0))
             total_volume = stats.get('total_volume', stats.get('total_value_usd', 0))
             panels.append(Panel(
-                f"[bold white]💥 TOTAL LIQUIDATIONS[/bold white]\n[bold cyan]{total_count:,}[/bold cyan] events\n[bold yellow]{format_usd(total_volume)}[/bold yellow]",
+                f"[bold white]Total Liquidations[/bold white]\n[bold cyan]{total_count:,}[/bold cyan] events\n[bold yellow]{format_usd(total_volume)}[/bold yellow]",
                 border_style="cyan", width=28, padding=(0, 1)
             ))
 
@@ -78,7 +60,7 @@ def display_binance_stats(api):
             long_count = stats.get('long_count', stats.get('longs', 0))
             long_volume = stats.get('long_volume', stats.get('long_value_usd', 0))
             panels.append(Panel(
-                f"[bold green]📈 LONG LIQUIDATIONS[/bold green]\n[bold green]{long_count:,}[/bold green] events\n[bold yellow]{format_usd(long_volume)}[/bold yellow]",
+                f"[bold green]📈 Long Liquidations[/bold green]\n[bold green]{long_count:,}[/bold green] events\n[bold yellow]{format_usd(long_volume)}[/bold yellow]",
                 border_style="green", width=28, padding=(0, 1)
             ))
 
@@ -86,7 +68,7 @@ def display_binance_stats(api):
             short_count = stats.get('short_count', stats.get('shorts', 0))
             short_volume = stats.get('short_volume', stats.get('short_value_usd', 0))
             panels.append(Panel(
-                f"[bold red]📉 SHORT LIQUIDATIONS[/bold red]\n[bold red]{short_count:,}[/bold red] events\n[bold yellow]{format_usd(short_volume)}[/bold yellow]",
+                f"[bold red]📉 Short Liquidations[/bold red]\n[bold red]{short_count:,}[/bold red] events\n[bold yellow]{format_usd(short_volume)}[/bold yellow]",
                 border_style="red", width=28, padding=(0, 1)
             ))
 
@@ -96,10 +78,10 @@ def display_binance_stats(api):
             total_ls = long_count + short_count if (long_count + short_count) > 0 else 1
             long_pct, short_pct = (long_count / total_ls) * 100, (short_count / total_ls) * 100
             ratio_text = Text()
-            ratio_text.append("📈 LONGS ", style="bold green")
+            ratio_text.append("📈 Longs ", style="bold green")
             ratio_text.append("█" * int(long_pct / 2), style="green")
             ratio_text.append("░" * int(short_pct / 2), style="red")
-            ratio_text.append(" 📉 SHORTS", style="bold red")
+            ratio_text.append(" 📉 Shorts", style="bold red")
             console.print(Panel(
                 Align.center(ratio_text),
                 title=f"[bold white]Long/Short Ratio: {long_pct:.1f}% / {short_pct:.1f}%[/bold white]",
@@ -107,17 +89,17 @@ def display_binance_stats(api):
             ))
 
     except Exception as e:
-        console.print(f"[red]🌙 Moon Dev: Error fetching Binance stats: {e}[/red]")
+        console.print(f"[red]Error fetching Binance stats: {e}[/red]")
 
 # ==================== TIMEFRAME LIQUIDATIONS ====================
 def display_timeframe_liquidations(api):
     """Display Binance liquidations across different timeframes"""
-    console.print(Panel("⏰ [bold cyan]BINANCE LIQUIDATIONS BY TIMEFRAME[/bold cyan] ⏰", border_style="cyan", padding=(0, 1)))
+    console.print(Panel("⏰ Binance Liquidations by Timeframe", border_style="cyan", padding=(0, 1)))
 
     table = Table(box=box.DOUBLE_EDGE, border_style="yellow", header_style="bold magenta", padding=(0, 1))
-    table.add_column("⏰ Timeframe", style="cyan", justify="center", width=12)
-    table.add_column("💥 Count", style="white", justify="right", width=12)
-    table.add_column("💰 Volume", style="yellow", justify="right", width=14)
+    table.add_column("Timeframe", style="cyan", justify="center", width=12)
+    table.add_column("Count", style="white", justify="right", width=12)
+    table.add_column("Volume", style="yellow", justify="right", width=14)
     table.add_column("📈 Longs", style="green", justify="right", width=10)
     table.add_column("📉 Shorts", style="red", justify="right", width=10)
 
@@ -169,7 +151,7 @@ def display_timeframe_liquidations(api):
 # ==================== RECENT LIQUIDATIONS ====================
 def display_recent_liquidations(api):
     """Display most recent Binance liquidation events"""
-    console.print(Panel("🔥 [bold red]RECENT BINANCE LIQUIDATIONS (1H)[/bold red] 🔥", border_style="red", padding=(0, 1)))
+    console.print(Panel("Recent Liquidations (1h)", border_style="red", padding=(0, 1)))
 
     try:
         data = api.get_binance_liquidations("1h")
@@ -191,11 +173,11 @@ def display_recent_liquidations(api):
 
             table = Table(box=box.ROUNDED, border_style="red", header_style="bold yellow", padding=(0, 1))
             table.add_column("#", style="dim", width=3)
-            table.add_column("🪙 Symbol", style="cyan", justify="center", width=12)
-            table.add_column("💰 Value", style="yellow", justify="right", width=14)
-            table.add_column("📊 Side", justify="center", width=10)
-            table.add_column("💵 Price", style="white", justify="right", width=14)
-            table.add_column("📦 Quantity", style="dim", justify="right", width=12)
+            table.add_column("Symbol", style="cyan", justify="center", width=12)
+            table.add_column("Value", style="yellow", justify="right", width=14)
+            table.add_column("Side", justify="center", width=10)
+            table.add_column("Price", style="white", justify="right", width=14)
+            table.add_column("Quantity", style="dim", justify="right", width=12)
             table.add_column("⏰ Time", style="dim", width=14)
 
             for i, liq in enumerate(liq_list[:15], 1):
@@ -208,9 +190,9 @@ def display_recent_liquidations(api):
 
                 # Format side
                 if side.lower() in ['long', 'buy', 'b']:
-                    side_display = "[green]📈 LONG[/green]"
+                    side_display = "[green]📈 Long[/green]"
                 else:
-                    side_display = "[red]📉 SHORT[/red]"
+                    side_display = "[red]📉 Short[/red]"
 
                 # Format time
                 if timestamp:
@@ -243,45 +225,38 @@ def display_recent_liquidations(api):
             console.print("[dim]No recent liquidations found[/dim]")
 
     except Exception as e:
-        console.print(f"[red]🌙 Moon Dev: Error fetching recent liquidations: {e}[/red]")
-
-# ==================== FOOTER ====================
-def print_footer():
-    """Print footer with timestamp and branding"""
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    console.print(f"[dim yellow]─────────────────────────────────────────────────────────────────────────────────────────────[/dim yellow]")
-    console.print(f"[dim yellow]🌙 Moon Dev's Binance Liquidation Dashboard | {now} | 📡 api.moondev.com | Built with 💜 by Moon Dev[/dim yellow]")
+        console.print(f"[red]Error fetching recent liquidations: {e}[/red]")
 
 # ==================== MAIN ====================
 def main():
-    """Main function - Moon Dev's Binance Liquidation Dashboard"""
-    console.clear()
-    print_banner()
+    """Binance liquidation dashboard entry point"""
+    console.rule("[bold]Binance Liquidations[/bold]")
 
-    console.print("[bold cyan]🌙 Moon Dev: Initializing API connection...[/bold cyan]")
-    api = MoonDevAPI()
+    console.print("Connecting...")
+    api = HyperliquidPublicAPI()
+    console.print(f"[green]Connected (no key required)[/green]")
 
-    if not api.api_key:
+    # Verify Binance endpoint is available before rendering sections
+    try:
+        api.get_binance_liquidations("1h")
+        available = True
+    except NotImplementedError as e:
+        available = False
+        unavail_msg = str(e)
+
+    if available:
+        display_binance_stats(api)
+        display_timeframe_liquidations(api)
+        display_recent_liquidations(api)
+    else:
         console.print(Panel(
-            "[bold red]❌ ERROR: No API key found![/bold red]\n\n"
-            "Please set MOONDEV_API_KEY in your .env file:\n"
-            "[dim]MOONDEV_API_KEY=your_key_here[/dim]\n\n"
-            "🌙 Get your API key at: [link=https://moondev.com]https://moondev.com[/link]",
-            border_style="red",
-            title="🔑 Authentication Required",
-            padding=(0, 1)
+            f"[bold yellow]BINANCE LIQUIDATION DATA UNAVAILABLE[/bold yellow]\n\n"
+            f"[white]{unavail_msg}[/white]\n\n"
+            f"[dim]Binance previously provided /fapi/v1/forceOrders as a free public endpoint.\n"
+            f"That access has since been revoked. A paid Binance API key would be required.[/dim]",
+            border_style="yellow", padding=(1, 2)
         ))
-        return
-
-    console.print(f"[green]✅ API key loaded (...{api.api_key[-4:]})[/green]")
-
-    with console.status("[bold yellow]🌙 Fetching Binance liquidation data...[/bold yellow]"):
-        pass
-
-    display_binance_stats(api)
-    display_timeframe_liquidations(api)
-    display_recent_liquidations(api)
-    print_footer()
+    console.print(f"[dim]{datetime.now():%Y-%m-%d %H:%M:%S}[/dim]")
 
 if __name__ == "__main__":
     main()

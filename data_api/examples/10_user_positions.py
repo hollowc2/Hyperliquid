@@ -1,9 +1,5 @@
 """
-Moon Dev's User Positions Dashboard
-====================================
-Beautiful terminal dashboard for viewing Hyperliquid wallet positions
-
-Built with love by Moon Dev
+User Positions — View open positions for any Hyperliquid wallet address.
 
 Usage: python 10_user_positions.py [address]
        python 10_user_positions.py 0x010461c14e146ac35fe42271bdc1134ee31c703a
@@ -15,7 +11,7 @@ from datetime import datetime
 
 # Add parent directory to path to import api.py
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from api import MoonDevAPI
+from api import HyperliquidPublicAPI
 
 from rich.console import Console
 from rich.table import Table
@@ -27,29 +23,6 @@ from rich.align import Align
 
 
 console = Console()
-
-
-def create_banner():
-    """Create the Moon Dev branded header banner"""
-    banner = """
- _   _ ___  ___ _ __
-| | | / __|/ _ \\ '__|
-| |_| \\__ \\  __/ |
- \\__,_|___/\\___|_|
- ____   ___  ____ ___ _____ ___ ___  _   _ ____
-|  _ \\ / _ \\/ ___|_ _|_   _|_ _/ _ \\| \\ | / ___|
-| |_) | | | \\___ \\| |  | |  | | | | |  \\| \\___ \\
-|  __/| |_| |___) | |  | |  | | |_| | |\\  |___) |
-|_|    \\___/|____/___| |_| |___\\___/|_| \\_|____/
-"""
-    return Panel(
-        Align.center(Text(banner, style="bold cyan")),
-        title="[bold magenta]MOON DEV'S HYPERLIQUID POSITION VIEWER[/bold magenta]",
-        subtitle="[dim]Get positions for any Hyperliquid wallet[/dim]",
-        border_style="bright_cyan",
-        box=box.DOUBLE_EDGE,
-        padding=(0, 1)
-    )
 
 
 def format_usd(value):
@@ -77,7 +50,7 @@ def format_pnl(value):
 
 
 def create_positions_table(positions_data, address):
-    """Create a beautiful table of positions"""
+    """Create a table of positions"""
     table = Table(
         title=f"Positions for {address[:10]}...{address[-6:]}",
         box=box.ROUNDED,
@@ -295,8 +268,8 @@ def create_coin_breakdown(positions_data):
 
 
 def main():
-    """Main function to run the user positions dashboard"""
-    console.print(create_banner())
+    """User positions entry point"""
+    console.rule("[bold]User Positions[/bold]")
 
     # Get address from command line or use default
     if len(sys.argv) > 1:
@@ -306,10 +279,10 @@ def main():
         address = "0x010461c14e146ac35fe42271bdc1134ee31c703a"
         console.print(f"[dim]No address provided, using default: {address[:10]}...[/dim]")
 
-    console.print(f"[bold cyan]Moon Dev: Fetching positions for {address[:10]}...{address[-6:]}[/bold cyan]")
+    console.print(f"[dim]Fetching positions for {address[:10]}...{address[-6:]}[/dim]")
 
     # Initialize API
-    api = MoonDevAPI()
+    api = HyperliquidPublicAPI()
 
     # Fetch positions
     positions_data = api.get_user_positions(address)
@@ -324,8 +297,7 @@ def main():
     console.print(positions_table)
 
     # Footer with timestamp
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    console.print(f"\n[dim]Moon Dev | {timestamp} | Hyperliquid User Positions | moondev.com[/dim]")
+    console.print(f"[dim]{datetime.now():%Y-%m-%d %H:%M:%S}[/dim]")
 
 
 if __name__ == "__main__":

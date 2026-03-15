@@ -1,35 +1,17 @@
 """
-🌙 Moon Dev's Order Flow Dashboard - Compact & Beautiful
+Order Flow — Real-time order flow intelligence across timeframes and coins.
 """
 import sys, os
 from datetime import datetime
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from api import MoonDevAPI
+from api import HyperliquidPublicAPI
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
 from rich.text import Text
 from rich import box
-from rich.align import Align
 
 console = Console()
-
-def create_banner():
-    """Create the Moon Dev branded banner"""
-    banner = """    ███╗   ███╗ ██████╗  ██████╗ ███╗   ██╗    ██████╗ ███████╗██╗   ██╗
-    ████╗ ████║██╔═══██╗██╔═══██╗████╗  ██║    ██╔══██╗██╔════╝██║   ██║
-    ██╔████╔██║██║   ██║██║   ██║██╔██╗ ██║    ██║  ██║█████╗  ██║   ██║
-    ██║╚██╔╝██║██║   ██║██║   ██║██║╚██╗██║    ██║  ██║██╔══╝  ╚██╗ ██╔╝
-    ██║ ╚═╝ ██║╚██████╔╝╚██████╔╝██║ ╚████║    ██████╔╝███████╗ ╚████╔╝
-    ╚═╝     ╚═╝ ╚═════╝  ╚═════╝ ╚═╝  ╚═══╝    ╚═════╝ ╚══════╝  ╚═══╝"""
-    return Panel(
-        Align.center(Text(banner, style="bold cyan")),
-        title="🌙 [bold magenta]ORDER FLOW DASHBOARD[/bold magenta] 🌙",
-        subtitle="[dim]Real-Time Order Flow Intelligence by Moon Dev[/dim]",
-        border_style="bright_cyan",
-        box=box.DOUBLE_EDGE,
-        padding=(0, 1)
-    )
 
 
 def format_volume(value):
@@ -75,13 +57,9 @@ def create_pressure_bar(buy_pressure, width=20):
 
 
 def main():
-    console.clear()
-    console.print(create_banner())
-    api = MoonDevAPI()
-    if not api.api_key:
-        console.print("[red]No API key found![/]")
-        return
-    console.print("[green]Moon Dev API Connected[/]")
+    console.rule("[bold]Order Flow[/bold]")
+    api = HyperliquidPublicAPI()
+    console.print("[green]Connected to Hyperliquid public API[/]")
     stats = api.get_orderflow_stats()
     orderflow = api.get_orderflow()
     if not stats or not orderflow:
@@ -89,30 +67,26 @@ def main():
         return
 
     # OVERVIEW STATS
-    total_trades = stats.get('total_trades', 0)
+    total_trades = stats.get('total_trades')  # may be None
     total_volume = stats.get('total_volume_usd', 0)
     buy_volume = stats.get('buy_volume_usd', 0)
     sell_volume = stats.get('sell_volume_usd', 0)
-    trades_per_sec = stats.get('trades_per_second', 0)
+    trades_per_sec = stats.get('trades_per_second')  # may be None
     overall_buy_pct = (buy_volume / total_volume * 100) if total_volume > 0 else 50
 
     overview = Text()
-    overview.append("Trades: ", style="cyan")
-    overview.append(f"{total_trades:,}", style="bold white")
-    overview.append(" | Vol: ", style="cyan")
+    overview.append("Vol: ", style="cyan")
     overview.append(f"{format_volume(total_volume)}", style="bold yellow")
     overview.append(" | Buy: ", style="green")
     overview.append(f"{format_volume(buy_volume)} ({overall_buy_pct:.1f}%)", style="bold green")
     overview.append(" | Sell: ", style="red")
     overview.append(f"{format_volume(sell_volume)} ({100-overall_buy_pct:.1f}%)", style="bold red")
-    overview.append(" | ", style="dim")
-    overview.append(f"{trades_per_sec:.1f}/s", style="bold white")
 
-    console.print(Panel(overview, title="[bold yellow]ORDER FLOW OVERVIEW[/]", border_style="yellow", box=box.ROUNDED, padding=(0, 1)))
+    console.print(Panel(overview, title="[bold yellow]Order Flow Overview[/bold yellow]", border_style="yellow", box=box.ROUNDED, padding=(0, 1)))
 
     # TIMEFRAME TABLE
     windows = orderflow.get('windows', {})
-    tf_table = Table(title="[bold magenta]ORDER FLOW BY TIMEFRAME[/]", box=box.SIMPLE, border_style="cyan", header_style="bold white", padding=(0, 1))
+    tf_table = Table(title="[bold magenta]Order Flow by Timeframe[/bold magenta]", box=box.SIMPLE, border_style="cyan", header_style="bold white", padding=(0, 1))
     tf_table.add_column("TF", style="bold cyan", justify="center", width=4)
     tf_table.add_column("Buy Pressure", justify="center", width=26)
     tf_table.add_column("Delta", style="white", justify="right", width=12)
@@ -136,7 +110,7 @@ def main():
 
     # PER COIN TABLE
     by_coin = orderflow.get('by_coin', {})
-    coin_table = Table(title="[bold magenta]ORDER FLOW BY COIN[/]", box=box.SIMPLE, border_style="cyan", header_style="bold white", padding=(0, 1))
+    coin_table = Table(title="[bold magenta]Order Flow by Coin[/bold magenta]", box=box.SIMPLE, border_style="cyan", header_style="bold white", padding=(0, 1))
     coin_table.add_column("Coin", style="bold white", justify="center", width=6)
     coin_table.add_column("Buy Pressure", justify="center", width=26)
     coin_table.add_column("Delta", justify="right", width=12)
@@ -162,7 +136,7 @@ def main():
     trades_data = api.get_trades()
     trades = trades_data.get('trades', []) if trades_data else []
     if trades:
-        trades_table = Table(title="[bold magenta]RECENT TRADES[/]", box=box.SIMPLE, border_style="cyan", header_style="bold white", padding=(0, 1))
+        trades_table = Table(title="[bold magenta]Recent Trades[/bold magenta]", box=box.SIMPLE, border_style="cyan", header_style="bold white", padding=(0, 1))
         trades_table.add_column("Time", style="dim", width=8)
         trades_table.add_column("Coin", style="bold white", justify="center", width=5)
         trades_table.add_column("Side", justify="center", width=5)
@@ -178,8 +152,11 @@ def main():
             price = trade.get('price', 0)
             value = trade.get('value_usd', 0)
             try:
-                dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
-                time_str = dt.strftime("%H:%M:%S")
+                if isinstance(timestamp, (int, float)):
+                    time_str = datetime.fromtimestamp(timestamp / 1000 if timestamp > 1e10 else timestamp).strftime("%H:%M:%S")
+                else:
+                    dt = datetime.fromisoformat(str(timestamp).replace('Z', '+00:00'))
+                    time_str = dt.strftime("%H:%M:%S")
             except:
                 time_str = "N/A"
             side_display = "[green]BUY[/]" if side == 'BUY' else "[red]SELL[/]"
@@ -193,10 +170,7 @@ def main():
 
         console.print(trades_table)
 
-    # FOOTER
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    console.print(f"[dim]{'─'*60}[/]")
-    console.print(f"[bold cyan]Moon Dev Order Flow[/] [dim]|[/] {now} [dim]|[/] [dim]moondev.com[/]")
+    console.print(f"[dim]{datetime.now():%Y-%m-%d %H:%M:%S}[/dim]")
 
 if __name__ == "__main__":
     main()

@@ -1,12 +1,5 @@
 """
-🌙 Moon Dev's Position Dashboard
-================================
-Beautiful terminal dashboard for tracking large positions near liquidation ($200k+)
-
-Built with love by Moon Dev 🚀
-Using the Rich library for gorgeous terminal output
-
-Usage: python 02_positions.py
+Position Tracker — Large positions near liquidation ($200k+).
 """
 
 import sys
@@ -15,7 +8,7 @@ from datetime import datetime
 
 # Add parent directory to path to import api.py
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from api import MoonDevAPI
+from api import HyperliquidPublicAPI
 
 from rich.console import Console
 from rich.table import Table
@@ -32,26 +25,8 @@ from rich.align import Align
 console = Console()
 
 
-def create_banner():
-    """Create the Moon Dev branded header banner"""
-    banner = """███╗   ███╗ ██████╗  ██████╗ ███╗   ██╗    ██████╗ ███████╗██╗   ██╗
-████╗ ████║██╔═══██╗██╔═══██╗████╗  ██║    ██╔══██╗██╔════╝██║   ██║
-██╔████╔██║██║   ██║██║   ██║██╔██╗ ██║    ██║  ██║█████╗  ██║   ██║
-██║╚██╔╝██║██║   ██║██║   ██║██║╚██╗██║    ██║  ██║██╔══╝  ╚██╗ ██╔╝
-██║ ╚═╝ ██║╚██████╔╝╚██████╔╝██║ ╚████║    ██████╔╝███████╗ ╚████╔╝
-╚═╝     ╚═╝ ╚═════╝  ╚═════╝ ╚═╝  ╚═══╝    ╚═════╝ ╚══════╝  ╚═══╝"""
-    return Panel(
-        Align.center(Text(banner, style="bold cyan")),
-        title="🌙 [bold magenta]POSITION TRACKER[/bold magenta] 🌙",
-        subtitle="[dim]💰 Large Positions Near Liquidation by Moon Dev 💰[/dim]",
-        border_style="bright_cyan",
-        box=box.DOUBLE_EDGE,
-        padding=(0, 1)
-    )
-
-
 def get_full_address(address):
-    """Return full wallet address for display - Moon Dev wants the FULL address!"""
+    """Return full wallet address for display"""
     if not address:
         return "Unknown"
     return address
@@ -103,9 +78,9 @@ def get_risk_color(distance_pct):
 
 
 def create_positions_table(positions_data):
-    """Create a beautiful table of positions"""
+    """Create a table of positions"""
     table = Table(
-        title="🐋 Whale Positions Near Liquidation 🐋",
+        title="🐋 Whale Positions Near Liquidation",
         box=box.ROUNDED,
         header_style="bold magenta",
         border_style="cyan",
@@ -113,15 +88,15 @@ def create_positions_table(positions_data):
         padding=(0, 1)
     )
 
-    table.add_column("💰 Address", style="cyan", justify="center")
-    table.add_column("🪙 Coin", style="bold white", justify="center")
-    table.add_column("📊 Side", justify="center")
-    table.add_column("💵 Position Value", style="yellow", justify="right")
-    table.add_column("⚡ Lev", style="magenta", justify="center")
-    table.add_column("💹 Entry", justify="right")
-    table.add_column("🎯 Liq Price", justify="right")
-    table.add_column("⚠️ Dist%", justify="center")
-    table.add_column("📈 PnL", justify="right")
+    table.add_column("Address", style="cyan", justify="center")
+    table.add_column("Coin", style="bold white", justify="center")
+    table.add_column("Side", justify="center")
+    table.add_column("Position Value", style="yellow", justify="right")
+    table.add_column("Lev", style="magenta", justify="center")
+    table.add_column("Entry", justify="right")
+    table.add_column("Liq Price", justify="right")
+    table.add_column("Dist%", justify="center")
+    table.add_column("PnL", justify="right")
 
     # Combine longs and shorts from the API response
     all_positions = []
@@ -224,12 +199,12 @@ def create_stats_panel(positions_data):
     pnl_color = "green" if total_pnl >= 0 else "red"
     pnl_sign = "+" if total_pnl >= 0 else ""
     stats_lines = [
-        f"[bold cyan]💰 Total Positions:[/bold cyan] [yellow]{total_positions:,}[/yellow]",
-        f"[bold cyan]💵 Position Value:[/bold cyan] [yellow]{format_usd(total_value)}[/yellow]",
-        f"[bold cyan]🔎 Min Size:[/bold cyan] [dim]{format_usd(min_value)}[/dim]",
-        f"[bold cyan]📊 Unrealized PnL:[/bold cyan] [{pnl_color}]{pnl_sign}{format_usd(total_pnl)}[/{pnl_color}]",
-        f"[bold cyan]🟢 Longs:[/bold cyan] [green]{total_longs}[/green] | [bold cyan]🔴 Shorts:[/bold cyan] [red]{total_shorts}[/red]",
-        f"[bold cyan]🚨 Critical (<2%):[/bold cyan] [bold red]{critical_count}[/bold red] | [bold cyan]⚠️ High (2-5%):[/bold cyan] [yellow]{high_risk_count}[/yellow]"
+        f"[bold cyan]Total Positions:[/bold cyan] [yellow]{total_positions:,}[/yellow]",
+        f"[bold cyan]Position Value:[/bold cyan] [yellow]{format_usd(total_value)}[/yellow]",
+        f"[bold cyan]Min Size:[/bold cyan] [dim]{format_usd(min_value)}[/dim]",
+        f"[bold cyan]Unrealized PnL:[/bold cyan] [{pnl_color}]{pnl_sign}{format_usd(total_pnl)}[/{pnl_color}]",
+        f"[bold cyan]Longs:[/bold cyan] [green]{total_longs}[/green] | [bold cyan]Shorts:[/bold cyan] [red]{total_shorts}[/red]",
+        f"[bold cyan]Critical (<2%):[/bold cyan] [bold red]{critical_count}[/bold red] | [bold cyan]High (2-5%):[/bold cyan] [yellow]{high_risk_count}[/yellow]"
     ]
     return Panel(
         "\n".join(stats_lines),
@@ -347,11 +322,11 @@ def create_risk_analysis(positions_data):
     medium_value = sum(p.get('value', 0) for p in medium)
 
     lines = [
-        f"[bold red]🚨 CRITICAL (<2%):[/bold red] [red]{len(critical)}[/red] pos | [yellow]${critical_value/1e6:.2f}M[/yellow]",
-        f"[bold yellow]⚠️ HIGH (2-5%):[/bold yellow] [yellow]{len(high)}[/yellow] pos | [yellow]${high_value/1e6:.2f}M[/yellow]",
-        f"[bold cyan]📊 MEDIUM (5-10%):[/bold cyan] [cyan]{len(medium)}[/cyan] pos | [yellow]${medium_value/1e6:.2f}M[/yellow]",
-        f"[bold white]📉 MODERATE (10-20%):[/bold white] [white]{len(moderate)}[/white] positions",
-        f"[bold green]✅ LOW (>20%):[/bold green] [green]{len(low)}[/green] positions"
+        f"[bold red]Critical (<2%):[/bold red] [red]{len(critical)}[/red] pos | [yellow]${critical_value/1e6:.2f}M[/yellow]",
+        f"[bold yellow]High (2-5%):[/bold yellow] [yellow]{len(high)}[/yellow] pos | [yellow]${high_value/1e6:.2f}M[/yellow]",
+        f"[bold cyan]Medium (5-10%):[/bold cyan] [cyan]{len(medium)}[/cyan] pos | [yellow]${medium_value/1e6:.2f}M[/yellow]",
+        f"[bold white]Moderate (10-20%):[/bold white] [white]{len(moderate)}[/white] positions",
+        f"[bold green]Low (>20%):[/bold green] [green]{len(low)}[/green] positions"
     ]
     return Panel(
         "\n".join(lines),
@@ -399,23 +374,10 @@ def create_top_whales_panel(positions_data):
 
 
 def main():
-    """Main function to run the position dashboard"""
-    console.print(create_banner())
-    # Initialize API
-    console.print("[bold cyan]🌙 Moon Dev: Initializing API...[/bold cyan]")
-    api = MoonDevAPI()
-    if not api.api_key:
-        console.print(Panel(
-            "[bold red]❌ No API key found![/bold red]\n"
-            "Please set MOONDEV_API_KEY in your .env file\n"
-            "[dim]Get your API key at: https://moondev.com[/dim]",
-            title="⚠️ Auth Error",
-            border_style="red",
-            padding=(0, 1)
-        ))
-        return
-    console.print("[green]✅ API Key loaded[/green]")
-    console.print("[bold magenta]📡 Fetching positions...[/bold magenta]")
+    """Position tracker entry point"""
+    console.rule("[bold]Positions[/bold]")
+    api = HyperliquidPublicAPI()
+    console.print("[dim]Fetching positions...[/dim]")
     positions_data = api.get_positions()
     # Create and display stats panels side by side
     stats_panel = create_stats_panel(positions_data)
@@ -429,8 +391,7 @@ def main():
     console.print(positions_table)
     # Footer with timestamp
     updated_at = positions_data.get('updated_at', '') if isinstance(positions_data, dict) else ''
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    console.print(f"[dim]─── 🌙 Moon Dev │ {timestamp} │ Data: {updated_at} │ moondev.com ───[/dim]")
+    console.print(f"[dim]{datetime.now():%Y-%m-%d %H:%M:%S}[/dim]")
 
 
 if __name__ == "__main__":

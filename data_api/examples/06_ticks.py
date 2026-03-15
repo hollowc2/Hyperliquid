@@ -1,14 +1,5 @@
 """
-🌙 Moon Dev's Tick Data Terminal Dashboard
-Built with love by Moon Dev 🚀
-
-A beautiful terminal dashboard displaying live crypto prices and tick data.
-Uses the Rich library for gorgeous terminal formatting.
-
-Usage:
-    python 06_ticks.py
-
-Author: Moon Dev
+Tick Data — Live crypto prices and tick data for tracked symbols.
 """
 
 import sys
@@ -17,7 +8,7 @@ from datetime import datetime
 
 # Add parent directory to path so we can import api.py
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from api import MoonDevAPI
+from api import HyperliquidPublicAPI
 
 from rich.console import Console
 from rich.table import Table
@@ -29,7 +20,6 @@ from rich import box
 from rich.align import Align
 
 
-# ==================== MOON DEV CONFIGURATION ====================
 SYMBOLS = ["BTC", "ETH", "HYPE", "SOL", "XRP"]
 SYMBOL_NAMES = {
     "BTC": "Bitcoin",
@@ -41,7 +31,7 @@ SYMBOL_NAMES = {
 
 
 def format_price(price):
-    """Format price with commas and proper decimals - Moon Dev style"""
+    """Format price with commas and proper decimals"""
     if price is None:
         return "N/A"
     if price >= 1000:
@@ -53,7 +43,7 @@ def format_price(price):
 
 
 def create_sparkline(prices, width=20):
-    """Create ASCII sparkline from price data - Moon Dev's mini chart"""
+    """Create ASCII sparkline from price data"""
     if not prices or len(prices) < 2:
         return "▄" * width
 
@@ -78,40 +68,15 @@ def create_sparkline(prices, width=20):
     return sparkline
 
 
-def create_header_banner(console):
-    """Create the gorgeous Moon Dev header banner"""
-    banner = """███╗   ███╗ ██████╗  ██████╗ ███╗   ██╗    ██████╗ ███████╗██╗   ██╗
-████╗ ████║██╔═══██╗██╔═══██╗████╗  ██║    ██╔══██╗██╔════╝██║   ██║
-██╔████╔██║██║   ██║██║   ██║██╔██╗ ██║    ██║  ██║█████╗  ██║   ██║
-██║╚██╔╝██║██║   ██║██║   ██║██║╚██╗██║    ██║  ██║██╔══╝  ╚██╗ ██╔╝
-██║ ╚═╝ ██║╚██████╔╝╚██████╔╝██║ ╚████║    ██████╔╝███████╗ ╚████╔╝
-╚═╝     ╚═╝ ╚═════╝  ╚═════╝ ╚═╝  ╚═══╝    ╚═════╝ ╚══════╝  ╚═══╝"""
-    console.print(Panel(
-        Align.center(Text(banner, style="bold cyan")),
-        title="🌙 [bold magenta]TICK DATA DASHBOARD[/bold magenta] 🌙",
-        subtitle="[dim]📊 Live Crypto Prices by Moon Dev 📊[/dim]",
-        border_style="bright_cyan",
-        box=box.DOUBLE_EDGE,
-        padding=(0, 1)
-    ))
-
-
 def main():
-    """🌙 Moon Dev's Tick Data Dashboard - Main Entry Point"""
+    """Tick data dashboard entry point"""
     console = Console()
 
-    # Clear screen and show header
-    console.clear()
-    create_header_banner(console)
-    # Initialize API
-    console.print("[dim]🔌 Connecting to Moon Dev API...[/]")
-    api = MoonDevAPI()
-    if not api.api_key:
-        console.print("[bold red]❌ ERROR: No API key found![/]")
-        console.print("[yellow]Set MOONDEV_API_KEY in your .env file[/]")
-        return
-    console.print(f"[green]✅ Moon Dev API connected[/]")
-    console.print("[cyan]📡 Fetching tick data from Moon Dev servers...[/]")
+    console.rule("[bold]Tick Data[/bold]")
+    console.print("[dim]Connecting to Hyperliquid public API...[/dim]")
+    api = HyperliquidPublicAPI()
+    console.print(f"[green]Connected (no key required)[/green]")
+    console.print("[dim]Fetching tick data...[/dim]")
 
     stats_data = api.get_tick_stats()
     latest_data = api.get_tick_latest()
@@ -126,11 +91,11 @@ def main():
         stats_content = Text()
         stats_content.append("📊 Ticks: ", style="cyan")
         stats_content.append(f"{ticks_collected:,}", style="bold yellow")
-        stats_content.append("  🎯 Symbols: ", style="cyan")
+        stats_content.append("  Symbols: ", style="cyan")
         stats_content.append(f"{', '.join(SYMBOLS)}", style="bold white")
         console.print(Panel(
             stats_content,
-            title="[bold yellow]🌙 Moon Dev Collection Stats[/]",
+            title="[bold yellow]Collection Stats[/bold yellow]",
             border_style="yellow",
             box=box.ROUNDED,
             padding=(0, 1)
@@ -138,7 +103,7 @@ def main():
 
     # ==================== LIVE PRICES TABLE ====================
     price_table = Table(
-        title="[bold magenta]🌙 LIVE PRICES[/]",
+        title="[bold magenta]Live Prices[/bold magenta]",
         box=box.ROUNDED,
         border_style="cyan",
         header_style="bold magenta",
@@ -148,7 +113,7 @@ def main():
 
     price_table.add_column("Symbol", style="bold white", justify="center", width=8)
     price_table.add_column("Name", style="cyan", width=12)
-    price_table.add_column("💵 Current Price", style="bold green", justify="right", width=16)
+    price_table.add_column("Current Price", style="bold green", justify="right", width=16)
     price_table.add_column("📉 24h Low", style="red", justify="right", width=14)
     price_table.add_column("📈 24h High", style="green", justify="right", width=14)
     price_table.add_column("📊 Sparkline", justify="center", width=22)
@@ -190,7 +155,7 @@ def main():
     console.print(price_table)
 
     # ==================== RECENT TICKS TABLE ====================
-    console.print("[bold magenta]📊 RECENT TICK DATA[/]")
+    console.print("[bold magenta]Recent Tick Data[/bold magenta]")
 
     for symbol in SYMBOLS:
         tick_response = api.get_ticks(symbol.lower(), "1h")
@@ -240,8 +205,7 @@ def main():
                 console.print(tick_table)
 
     # ==================== FOOTER ====================
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    console.print(f"[dim]━━━ 🌙 Moon Dev's Tick Dashboard | {now} | moondev.com ━━━[/]")
+    console.print(f"[dim]{datetime.now():%Y-%m-%d %H:%M:%S}[/dim]")
 
 
 if __name__ == "__main__":

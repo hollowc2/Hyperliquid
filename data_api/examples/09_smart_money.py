@@ -1,19 +1,5 @@
 """
-🌙 Moon Dev's Smart Money Dashboard
-====================================
-The CROWN JEWEL terminal dashboard for tracking smart money movements.
-
-Built with love by Moon Dev 🚀
-https://moondev.com
-
-Features:
-- Top 10 Smart Money Leaderboard with PnL
-- Smart Money vs Dumb Money counts
-- Trading Signals across timeframes (10m, 1h, 24h)
-- Beautiful Rich terminal formatting
-
-Usage:
-    python 09_smart_money.py
+Smart Money — Leaderboard, wallet rankings, and trading signals across timeframes.
 """
 
 import sys
@@ -22,7 +8,7 @@ from datetime import datetime
 
 # Add parent directory to path for api import
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from api import MoonDevAPI
+from api import HyperliquidPublicAPI
 
 from rich.console import Console
 from rich.table import Table
@@ -37,7 +23,7 @@ console = Console()
 
 
 def format_pnl(pnl):
-    """Format PnL with color and $ formatting - Moon Dev style"""
+    """Format PnL with color and $ formatting"""
     if pnl is None:
         return Text("N/A", style="dim")
 
@@ -88,28 +74,10 @@ def get_rank_emoji(rank):
         return "  "
 
 
-def create_header_banner():
-    """Create the Moon Dev header banner"""
-    banner = """    ███╗   ███╗ ██████╗  ██████╗ ███╗   ██╗    ██████╗ ███████╗██╗   ██╗
-    ████╗ ████║██╔═══██╗██╔═══██╗████╗  ██║    ██╔══██╗██╔════╝██║   ██║
-    ██╔████╔██║██║   ██║██║   ██║██╔██╗ ██║    ██║  ██║█████╗  ██║   ██║
-    ██║╚██╔╝██║██║   ██║██║   ██║██║╚██╗██║    ██║  ██║██╔══╝  ╚██╗ ██╔╝
-    ██║ ╚═╝ ██║╚██████╔╝╚██████╔╝██║ ╚████║    ██████╔╝███████╗ ╚████╔╝
-    ╚═╝     ╚═╝ ╚═════╝  ╚═════╝ ╚═╝  ╚═══╝    ╚═════╝ ╚══════╝  ╚═══╝"""
-    return Panel(
-        Align.center(Text(banner, style="bold cyan")),
-        title="🌙 [bold magenta]SMART MONEY DASHBOARD[/bold magenta] 🌙",
-        subtitle="[dim]🧠 Track the smartest traders by Moon Dev 🧠[/dim]",
-        border_style="bright_cyan",
-        box=box.DOUBLE_EDGE,
-        padding=(0, 1),
-    )
-
-
 def create_leaderboard_table(leaderboard_data):
-    """Create the Top 10 Performers leaderboard table - Moon Dev style"""
+    """Create the Top 10 Performers leaderboard table"""
     table = Table(
-        title="🏆 [bold yellow]TOP 10 SMART MONEY PERFORMERS[/bold yellow] 🏆",
+        title="🏆 Top 10 Smart Money Performers",
         box=box.ROUNDED,
         border_style="yellow",
         header_style="bold magenta",
@@ -180,7 +148,7 @@ def create_leaderboard_table(leaderboard_data):
 
 
 def create_rankings_panel(rankings_data):
-    """Create Smart vs Dumb Money panel - Moon Dev style"""
+    """Create Smart vs Dumb Money panel"""
     # Extract data
     if isinstance(rankings_data, dict):
         smart_money = rankings_data.get('smart_money', rankings_data.get('top', rankings_data.get('smart', [])))
@@ -194,14 +162,14 @@ def create_rankings_panel(rankings_data):
 
     # Create content
     content = Text()
-    content.append("🧠 SMART MONEY\n", style="bold green")
+    content.append("Smart Money\n", style="bold green")
     content.append(f"   {smart_count} Wallets Tracked\n", style="green")
-    content.append("🤡 DUMB MONEY\n", style="bold red")
+    content.append("Dumb Money\n", style="bold red")
     content.append(f"   {dumb_count} Wallets Tracked", style="red")
 
     panel = Panel(
         Align.center(content),
-        title="[bold cyan]📊 WALLET RANKINGS[/bold cyan]",
+        title="[bold cyan]📊 Wallet Rankings[/bold cyan]",
         border_style="cyan",
         box=box.ROUNDED,
         padding=(0, 1),
@@ -211,9 +179,9 @@ def create_rankings_panel(rankings_data):
 
 
 def create_signals_table(signals_10m, signals_1h, signals_24h):
-    """Create trading signals table - Moon Dev style"""
+    """Create trading signals table"""
     table = Table(
-        title="📡 [bold cyan]SMART MONEY TRADING SIGNALS[/bold cyan] 📡",
+        title="📡 Smart Money Trading Signals",
         box=box.ROUNDED,
         border_style="cyan",
         header_style="bold magenta",
@@ -265,9 +233,9 @@ def create_signals_table(signals_10m, signals_1h, signals_24h):
                 if direction and isinstance(direction, str):
                     direction_upper = direction.upper()
                     if 'BUY' in direction_upper or 'LONG' in direction_upper:
-                        direction_text = Text("🟢 BUY", style="bold green")
+                        direction_text = Text("BUY", style="bold green")
                     elif 'SELL' in direction_upper or 'SHORT' in direction_upper:
-                        direction_text = Text("🔴 SELL", style="bold red")
+                        direction_text = Text("SELL", style="bold red")
                     else:
                         direction_text = Text(direction, style="yellow")
                 else:
@@ -308,7 +276,7 @@ def create_signals_table(signals_10m, signals_1h, signals_24h):
 
 
 def create_summary_stats(leaderboard_data, rankings_data):
-    """Create summary statistics panel - Moon Dev style"""
+    """Create summary statistics panel"""
     # Calculate total PnL from top 10
     if isinstance(leaderboard_data, dict):
         leaders = leaderboard_data.get('leaderboard', leaderboard_data.get('top', leaderboard_data.get('traders', [])))
@@ -338,14 +306,14 @@ def create_summary_stats(leaderboard_data, rankings_data):
 
     # Create summary content
     content = Text()
-    content.append("📈 TOP 10 COMBINED PnL: ", style="bold white")
+    content.append("Top 10 Combined PnL: ", style="bold white")
     content.append(f"${total_pnl:,.0f}\n", style="bold green" if total_pnl >= 0 else "bold red")
-    content.append(f"🧠 Smart Wallets: {smart_count}   |   ", style="green")
-    content.append(f"🤡 Dumb Wallets: {dumb_count}", style="red")
+    content.append(f"Smart Wallets: {smart_count}   |   ", style="green")
+    content.append(f"Dumb Wallets: {dumb_count}", style="red")
 
     panel = Panel(
         Align.center(content),
-        title="[bold yellow]📊 SUMMARY STATISTICS[/bold yellow]",
+        title="[bold yellow]📊 Summary Statistics[/bold yellow]",
         border_style="yellow",
         box=box.ROUNDED,
         padding=(0, 1),
@@ -355,39 +323,50 @@ def create_summary_stats(leaderboard_data, rankings_data):
 
 
 def main():
-    """Main function - Moon Dev's Smart Money Dashboard"""
-    console.clear()
-
-    # Print header banner
-    console.print(create_header_banner())
+    """Smart money dashboard entry point"""
+    console.rule("[bold]Smart Money[/bold]")
 
     # Initialize API
-    api = MoonDevAPI()
+    api = HyperliquidPublicAPI()
+    console.print("[dim]Connected to Hyperliquid public API (no key required)[/dim]")
+    console.print("[dim]Fetching smart money data...[/dim]")
 
-    if not api.api_key:
-        console.print(Panel(
-            "[bold red]ERROR: No API key found![/bold red]\n"
-            "Set MOONDEV_API_KEY in your .env file\n"
-            "Get your key at: https://moondev.com",
-            title="🚫 Authentication Required",
-            border_style="red",
-            padding=(0, 1),
-        ))
-        return
+    leaderboard_data = {}
+    console.print("[dim]  Fetching leaderboard...[/dim]")
+    try:
+        leaderboard_data = api.get_smart_money_leaderboard()
+    except NotImplementedError as e:
+        console.print(f"[yellow]  ℹ️  Leaderboard: {e}[/yellow]")
 
-    console.print("[dim]Moon Dev: API Key loaded successfully[/dim]")
-    console.print("[bold cyan]🌙 Moon Dev: Fetching smart money data...[/bold cyan]")
-    console.print("[dim]  📡 Fetching leaderboard...[/dim]")
-    leaderboard_data = api.get_smart_money_leaderboard()
-    console.print("[dim]  📡 Fetching rankings...[/dim]")
-    rankings_data = api.get_smart_money_rankings()
-    console.print("[dim]  📡 Fetching 10m signals...[/dim]")
-    signals_10m = api.get_smart_money_signals("10m")
-    console.print("[dim]  📡 Fetching 1h signals...[/dim]")
-    signals_1h = api.get_smart_money_signals("1h")
-    console.print("[dim]  📡 Fetching 24h signals...[/dim]")
-    signals_24h = api.get_smart_money_signals("24h")
-    console.print("[bold green]✅ Moon Dev: Data loaded![/bold green]")
+    rankings_data = {}
+    console.print("[dim]  Fetching rankings...[/dim]")
+    try:
+        rankings_data = api.get_smart_money_rankings()
+    except NotImplementedError as e:
+        console.print(f"[yellow]  ℹ️  Rankings: {e}[/yellow]")
+
+    signals_10m = {}
+    console.print("[dim]  Fetching 10m signals...[/dim]")
+    try:
+        signals_10m = api.get_smart_money_signals("10m")
+    except NotImplementedError as e:
+        console.print(f"[yellow]  ℹ️  Signals (10m): {e}[/yellow]")
+
+    signals_1h = {}
+    console.print("[dim]  Fetching 1h signals...[/dim]")
+    try:
+        signals_1h = api.get_smart_money_signals("1h")
+    except NotImplementedError as e:
+        console.print(f"[yellow]  ℹ️  Signals (1h): {e}[/yellow]")
+
+    signals_24h = {}
+    console.print("[dim]  Fetching 24h signals...[/dim]")
+    try:
+        signals_24h = api.get_smart_money_signals("24h")
+    except NotImplementedError as e:
+        console.print(f"[yellow]  ℹ️  Signals (24h): {e}[/yellow]")
+
+    console.print("[bold green]Fetch complete (stub methods shown above)[/bold green]")
     console.print("─" * 80)
 
     # Leaderboard table
@@ -402,9 +381,7 @@ def main():
     # Signals table
     console.print(create_signals_table(signals_10m, signals_1h, signals_24h))
 
-    # Footer - simple line with timestamp
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    console.print(f"[dim]─── 🌙 Moon Dev | {timestamp} | moondev.com | Stay smart, stay profitable! 🚀 ───[/dim]")
+    console.print(f"[dim]{datetime.now():%Y-%m-%d %H:%M:%S}[/dim]")
 
 
 if __name__ == "__main__":

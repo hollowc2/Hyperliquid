@@ -1,15 +1,9 @@
 """
-Moon Dev's Trade History Dashboard
-===================================
-Beautiful terminal dashboard for viewing Hyperliquid wallet fill/trade history
-
-Built with love by Moon Dev
+User Fill History — Trade history for any Hyperliquid wallet address.
 
 Usage: python 11_user_fills.py [address] [limit]
        python 11_user_fills.py 0x010461c14e146ac35fe42271bdc1134ee31c703a 500
        python 11_user_fills.py 0x010461c14e146ac35fe42271bdc1134ee31c703a -1  # ALL fills
-
-Data Source: Moon Dev's local Hyperliquid node (blazing fast!)
 """
 
 import sys
@@ -19,7 +13,7 @@ from collections import defaultdict
 
 # Add parent directory to path to import api.py
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from api import MoonDevAPI
+from api import HyperliquidPublicAPI
 
 from rich.console import Console
 from rich.table import Table
@@ -31,30 +25,6 @@ from rich.align import Align
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
 console = Console()
-
-# ==================== BANNER ====================
-def create_banner():
-    """Create the Moon Dev branded header banner"""
-    banner = """
- _____ ___  ___   ____  _____
-|_   _| _ \\/ _ \\ |  _ \\| ____|
-  | | |   / /_\\ \\| | | |  _|
-  | | | |\\ \\  _  | |_| | |___
-  |_| |_| \\_\\| |_|____/|_____|
- _   _ ___ ____ _____ ___  ______   __
-| | | |_ _/ ___|_   _/ _ \\|  _ \\ \\ / /
-| |_| || |\\___ \\ | || | | | |_) \\ V /
-|  _  || | ___) || || |_| |  _ < | |
-|_| |_|___|____/ |_| \\___/|_| \\_\\|_|
-"""
-    return Panel(
-        Align.center(Text(banner, style="bold cyan")),
-        title="[bold magenta]MOON DEV'S HYPERLIQUID TRADE HISTORY[/bold magenta]",
-        subtitle="[dim]Powered by Moon Dev's Local Node - Blazing Fast![/dim]",
-        border_style="bright_cyan",
-        box=box.DOUBLE_EDGE,
-        padding=(0, 1)
-    )
 
 
 # ==================== HELPER FUNCTIONS ====================
@@ -239,7 +209,7 @@ def display_summary_panels(stats, address, total_available):
 
 def display_coin_breakdown(stats):
     """Display breakdown by coin"""
-    console.print(Panel("[bold magenta]COIN BREAKDOWN[/bold magenta]", border_style="magenta", padding=(0, 1)))
+    console.print(Panel("[bold magenta]Coin Breakdown[/bold magenta]", border_style="magenta", padding=(0, 1)))
 
     table = Table(box=box.ROUNDED, border_style="magenta", header_style="bold cyan", padding=(0, 1))
     table.add_column("Coin", style="bold white", justify="center", width=10)
@@ -279,7 +249,7 @@ def display_coin_breakdown(stats):
 
 def display_direction_breakdown(stats):
     """Display breakdown by trade direction"""
-    console.print(Panel("[bold yellow]TRADE DIRECTION BREAKDOWN[/bold yellow]", border_style="yellow", padding=(0, 1)))
+    console.print(Panel("[bold yellow]Trade Direction Breakdown[/bold yellow]", border_style="yellow", padding=(0, 1)))
 
     table = Table(box=box.SIMPLE_HEAD, border_style="yellow", header_style="bold white", padding=(0, 1))
     table.add_column("Direction", style="bold", width=20)
@@ -311,8 +281,8 @@ def display_direction_breakdown(stats):
 
 
 def display_recent_fills(fills, limit=25):
-    """Display recent fills in a beautiful table"""
-    console.print(Panel(f"[bold cyan]RECENT TRADES (Last {min(len(fills), limit)})[/bold cyan]", border_style="cyan", padding=(0, 1)))
+    """Display recent fills in a table"""
+    console.print(Panel(f"[bold cyan]Recent Trades (Last {min(len(fills), limit)})[/bold cyan]", border_style="cyan", padding=(0, 1)))
 
     table = Table(box=box.ROUNDED, border_style="cyan", header_style="bold magenta", padding=(0, 1))
     table.add_column("Time", style="dim", width=14)
@@ -398,7 +368,7 @@ def display_recent_fills(fills, limit=25):
 
 def display_win_streak_analysis(fills):
     """Analyze and display win/loss streaks"""
-    console.print(Panel("[bold green]WIN/LOSS STREAK ANALYSIS[/bold green]", border_style="green", padding=(0, 1)))
+    console.print(Panel("[bold green]Win/Loss Streak Analysis[/bold green]", border_style="green", padding=(0, 1)))
 
     current_streak = 0
     max_win_streak = 0
@@ -434,19 +404,10 @@ def display_win_streak_analysis(fills):
     console.print("\n".join(lines))
 
 
-# ==================== FOOTER ====================
-def print_footer():
-    """Print footer with timestamp and branding"""
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    console.print(f"\n[dim cyan]{'─' * 100}[/dim cyan]")
-    console.print(f"[dim cyan]Moon Dev's Trade History Dashboard | {now} | api.moondev.com | Built with love by Moon Dev[/dim cyan]")
-
-
 # ==================== MAIN ====================
 def main():
-    """Main function - Moon Dev's Trade History Dashboard"""
-    console.clear()
-    console.print(create_banner())
+    """User fill history entry point"""
+    console.rule("[bold]User Fill History[/bold]")
 
     # Parse command line args
     if len(sys.argv) > 1:
@@ -460,28 +421,15 @@ def main():
     if len(sys.argv) > 2:
         limit = int(sys.argv[2])
 
-    console.print(f"[bold cyan]Moon Dev: Fetching trade history for {address[:10]}...{address[-6:]}[/bold cyan]")
+    console.print(f"[dim]Fetching trade history for {address[:10]}...{address[-6:]}[/dim]")
     console.print(f"[dim]Limit: {limit if limit > 0 else 'ALL'} fills[/dim]")
     console.print()
 
     # Initialize API
-    api = MoonDevAPI()
-
-    if not api.api_key:
-        console.print(Panel(
-            "[bold red]ERROR: No API key found![/bold red]\n"
-            "Please set MOONDEV_API_KEY in your .env file\n"
-            "[dim]MOONDEV_API_KEY=your_key_here[/dim]\n\n"
-            "Get your API key at: [link=https://moondev.com]https://moondev.com[/link]",
-            border_style="red",
-            title="Authentication Required",
-            padding=(0, 1)
-        ))
-        return
+    api = HyperliquidPublicAPI()
 
     # Fetch fills
-    with console.status("[bold cyan]Moon Dev: Scanning local node for fills...[/bold cyan]"):
-        fills_data = api.get_user_fills(address, limit=limit)
+    fills_data = api.get_user_fills(address, limit=limit)
 
     if not isinstance(fills_data, dict):
         console.print("[red]Error: Invalid response from API[/red]")
@@ -506,7 +454,7 @@ def main():
     # Calculate stats
     stats = calculate_fill_stats(fills)
 
-    # Display everything!
+    # Display everything
     display_summary_panels(stats, address, total_available)
     console.print()
 
@@ -521,7 +469,7 @@ def main():
 
     display_recent_fills(fills, limit=30)
 
-    print_footer()
+    console.print(f"[dim]{datetime.now():%Y-%m-%d %H:%M:%S}[/dim]")
 
 
 if __name__ == "__main__":

@@ -1,0 +1,12 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "hyperliquid-public-api"
+version = "0.1.0"
+requires-python = ">=3.9"
+dependencies = ["requests"]
+
+[tool.setuptools]
+py-modules = ["api"]

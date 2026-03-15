@@ -1,15 +1,5 @@
 """
-🌙 Moon Dev's Whale Watcher Dashboard 🐋
-=========================================
-A beautiful terminal dashboard for tracking whale activity
-
-Built with love by Moon Dev
-https://moondev.com
-
-This script displays:
-- Total whale address count
-- Sample whale addresses
-- Recent whale trades ($25k+)
+Whale Watcher — Tracks whale addresses and recent large trades ($25k+).
 """
 
 import sys
@@ -18,7 +8,7 @@ from datetime import datetime
 
 # Add parent directory to path for API import
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from api import MoonDevAPI
+from api import HyperliquidPublicAPI
 
 from rich.console import Console
 from rich.table import Table
@@ -34,24 +24,6 @@ from rich import box
 console = Console()
 
 
-def create_banner():
-    """Create the Moon Dev whale watcher banner"""
-    banner = """███╗   ███╗ ██████╗  ██████╗ ███╗   ██╗    ██████╗ ███████╗██╗   ██╗
-████╗ ████║██╔═══██╗██╔═══██╗████╗  ██║    ██╔══██╗██╔════╝██║   ██║
-██╔████╔██║██║   ██║██║   ██║██╔██╗ ██║    ██║  ██║█████╗  ██║   ██║
-██║╚██╔╝██║██║   ██║██║   ██║██║╚██╗██║    ██║  ██║██╔══╝  ╚██╗ ██╔╝
-██║ ╚═╝ ██║╚██████╔╝╚██████╔╝██║ ╚████║    ██████╔╝███████╗ ╚████╔╝
-╚═╝     ╚═╝ ╚═════╝  ╚═════╝ ╚═╝  ╚═══╝    ╚═════╝ ╚══════╝  ╚═══╝"""
-    return Panel(
-        Align.center(Text(banner, style="bold cyan")),
-        title="🌙 [bold magenta]WHALE WATCHER[/bold magenta] 🐋",
-        subtitle="[dim]Tracking the biggest players by Moon Dev[/dim]",
-        border_style="bright_cyan",
-        box=box.DOUBLE_EDGE,
-        padding=(0, 1)
-    )
-
-
 def create_stats_panel(whale_count):
     """Create a big number display for whale count"""
     stats_content = f"🐋 Total Tracked Whales: [bold yellow]{whale_count:,}[/bold yellow] | Verified $25k+ traders on Hyperliquid"
@@ -64,7 +36,7 @@ def create_stats_panel(whale_count):
 
 
 def create_addresses_table(addresses, limit=20):
-    """Create a beautiful table of whale addresses"""
+    """Create a table of whale addresses"""
     table = Table(
         title="🐋 [bold cyan]Sample Whale Addresses[/bold cyan]",
         show_header=True,
@@ -78,13 +50,12 @@ def create_addresses_table(addresses, limit=20):
     table.add_column("Whale Address", style="cyan", width=44)
     table.add_column("Status", style="green", width=8, justify="center")
     for idx, addr in enumerate(addresses[:limit], 1):
-        # Show full address - the main event! - Moon Dev
         table.add_row(str(idx), addr, "🐋")
     return table
 
 
 def create_trades_table(trades):
-    """Create a beautiful table of recent whale trades"""
+    """Create a table of recent whale trades"""
     table = Table(
         title="💵 [bold yellow]Recent Whale Trades ($25k+)[/bold yellow]",
         show_header=True,
@@ -103,7 +74,7 @@ def create_trades_table(trades):
     if not trades:
         table.add_row("", "[dim]No trades[/dim]", "", "", "", "")
         return table
-    for trade in trades[:15]:  # Show max 15 trades - Moon Dev
+    for trade in trades[:15]:
         timestamp = trade.get('time', trade.get('timestamp', trade.get('created_at', 'N/A')))
         if isinstance(timestamp, str) and len(timestamp) > 11:
             timestamp = timestamp[:11]
@@ -128,48 +99,49 @@ def create_trades_table(trades):
     return table
 
 
-def create_footer():
-    """Create footer with timestamp and branding"""
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    return Text(f"━━━ 🌙 Moon Dev | {now} | api.moondev.com ━━━", style="dim magenta", justify="center")
-
-
 def main():
-    """Main function - Moon Dev's Whale Watcher Dashboard"""
-    console.clear()
-    console.print(create_banner())
-    # Initialize API - Moon Dev
-    console.print("[dim]🌙 Connecting to Moon Dev API...[/dim]")
-    api = MoonDevAPI()
-    if not api.api_key:
+    """Whale watcher entry point"""
+    console.rule("[bold]Whale Watcher[/bold]")
+    console.print("[dim]Connecting to Hyperliquid public API...[/dim]")
+    api = HyperliquidPublicAPI()
+    console.print("[dim green]Connected (no key required)[/dim green]")
+
+    # Whale addresses — requires dedicated infrastructure (not available via public REST)
+    addresses = []
+    whale_count = 0
+    try:
+        addresses = api.get_whale_addresses()
+        whale_count = len(addresses)
+    except NotImplementedError as e:
         console.print(Panel(
-            "[bold red]ERROR:[/bold red] No API key found!\nSet MOONDEV_API_KEY in .env | Get key at: [cyan]moondev.com[/cyan]",
-            title="[red]Auth Error[/red]",
-            border_style="red",
-            padding=(0, 1)
+            f"[yellow]ℹ️  {e}[/yellow]",
+            title="[yellow]Whale Addresses Unavailable[/yellow]",
+            border_style="yellow", padding=(0, 1)
         ))
-        return
-    console.print("[dim green]✅ API connected[/dim green]")
-    # Fetch whale addresses - Moon Dev
-    addresses = api.get_whale_addresses()
-    whale_count = len(addresses)
     console.print(create_stats_panel(whale_count))
-    console.print(create_addresses_table(addresses, limit=20))
-    # Fetch whale trades - Moon Dev
-    trades_data = api.get_whales()
-    if isinstance(trades_data, dict):
-        trades = trades_data.get('trades', trades_data.get('data', []))
-        if not trades and 'whales' in trades_data:
-            trades = trades_data.get('whales', [])
-    elif isinstance(trades_data, list):
-        trades = trades_data
-    else:
-        trades = []
+    if addresses:
+        console.print(create_addresses_table(addresses, limit=20))
+
+    # Whale trades
+    trades = []
+    try:
+        trades_data = api.get_whales()
+        if isinstance(trades_data, dict):
+            trades = trades_data.get('trades', trades_data.get('data', []))
+            if not trades and 'whales' in trades_data:
+                trades = trades_data.get('whales', [])
+        elif isinstance(trades_data, list):
+            trades = trades_data
+    except NotImplementedError as e:
+        console.print(Panel(
+            f"[yellow]ℹ️  {e}[/yellow]",
+            title="[yellow]Whale Trades Unavailable[/yellow]",
+            border_style="yellow", padding=(0, 1)
+        ))
     console.print(create_trades_table(trades))
-    # Summary - Moon Dev
-    summary = f"🐋 [cyan]{whale_count:,}[/cyan] whales | 💵 [yellow]{len(trades)}[/yellow] trades | 📊 [green]Live[/green] | 🌙 [magenta]Watch for big moves![/magenta]"
+    summary = f"🐋 [cyan]{whale_count:,}[/cyan] whales | 💵 [yellow]{len(trades)}[/yellow] trades | 📊 [dim]Use get_large_trades() as approximation[/dim]"
     console.print(Panel(summary, title="[bold cyan]Summary[/bold cyan]", border_style="cyan", padding=(0, 1)))
-    console.print(create_footer())
+    console.print(f"[dim]{datetime.now():%Y-%m-%d %H:%M:%S}[/dim]")
 
 
 if __name__ == "__main__":
