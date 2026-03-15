@@ -4,3 +4,4 @@ websocket-client>=1.7.0
 pandas>=2.2.0
 python-dotenv>=1.0.1
 rich>=13.7.0
+textual>=0.47.0

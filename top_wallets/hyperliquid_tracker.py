@@ -2,298 +2,58 @@ import time
 import logging
 import json
 import os
-import select
-import sys
-import termios
-import tty
-import websocket
 import threading
 import requests
+import websocket
 from datetime import datetime
 from collections import defaultdict
-from rich.console import Console
-from rich.table import Table
+
+from rich.text import Text
+from rich.table import Table as RichTable
+
+from textual.app import App, ComposeResult
+from textual.widgets import Header, Footer, DataTable, Static
+from textual.containers import ScrollableContainer
+from textual.binding import Binding
+from textual import work, on
+
 from hyperliquid.info import Info
 from hyperliquid.utils import constants
 
-console = Console()
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+# ── Constants ──────────────────────────────────────────────────────────────────
 
-REFRESH_INTERVAL = 10  # seconds
-LARGE_TRADE_THRESHOLD = 100000  # USD
-FILLS_ON_STARTUP = 8  # recent fills to show per wallet on startup
-MIN_PERP_NOTIONAL = 50_000  # USD — hide perp positions below this size
-MIN_FILL_VALUE = 5_000     # USD — hide fills below this size in startup summary
+REFRESH_INTERVAL    = 60        # seconds between full refreshes
+LARGE_TRADE_THRESHOLD = 100_000 # USD
+FILLS_ON_STARTUP    = 8
+MIN_PERP_NOTIONAL   = 50_000    # USD — hide positions below this in detail panel
+MIN_FILL_VALUE      = 5_000     # USD — hide fills below this in startup summary
 CACHE_FILE = os.path.join(os.path.dirname(__file__), "wallet_cache.json")
 
 base_url = constants.MAINNET_API_URL
 
+# ── Data helpers ───────────────────────────────────────────────────────────────
 
 def query_info(msg):
-    url = base_url + "/info"
-    response = requests.post(url, json=msg)
+    response = requests.post(base_url + "/info", json=msg)
     if response.status_code == 200:
         return response.json()
-    else:
-        raise Exception(f"Error {response.status_code}: {response.text}")
+    raise Exception(f"Error {response.status_code}: {response.text}")
 
 
-def fetch_leaderboard():
+def fetch_leaderboard() -> list:
     url = "https://stats-data.hyperliquid.xyz/Mainnet/leaderboard"
     try:
         response = requests.get(url)
-        if response.status_code == 200:
-            data = response.json()
-            if isinstance(data, dict):
-                lb_data = data.get('leaderboardRows', data.get('data', []))
-            else:
-                lb_data = data
-            if isinstance(lb_data, list):
-                return lb_data
-            else:
-                console.print(f"[red]Unexpected data structure: {type(lb_data)}[/red]")
-                return []
-        else:
-            console.print(f"[red]Error fetching leaderboard: Status {response.status_code}[/red]")
+        if response.status_code != 200:
             return []
-    except Exception as e:
-        console.print(f"[red]Error fetching leaderboard:[/red] {e}")
-        return []
-
-
-# ── Cache ──────────────────────────────────────────────────────────────────────
-
-def save_cache(lb_data: list):
-    wallets = {}
-    for entry in lb_data[:10]:
-        addr = entry.get('ethAddress', '').lower()
-        if not addr:
-            continue
-        wallets[addr] = {
-            'perp_positions': entry.get('perp_positions', []),
-            'holdings': entry.get('holdings', '—'),
-        }
-    try:
-        with open(CACHE_FILE, 'w') as f:
-            json.dump({'saved_at': time.time(), 'wallets': wallets}, f)
-    except Exception as e:
-        logging.warning("Failed to save cache: %s", e)
-
-
-def load_cache() -> tuple[dict, float | None]:
-    try:
-        with open(CACHE_FILE) as f:
-            data = json.load(f)
-        return data.get('wallets', {}), data.get('saved_at')
-    except FileNotFoundError:
-        return {}, None
-    except Exception as e:
-        logging.warning("Failed to load cache: %s", e)
-        return {}, None
-
-
-def inject_cache(lb_data: list, cache: dict):
-    """Copy cached perp_positions/holdings into lb_data entries that lack live data."""
-    for entry in lb_data[:10]:
-        addr = entry.get('ethAddress', '').lower()
-        if addr in cache and 'perp_positions' not in entry:
-            entry['perp_positions'] = cache[addr]['perp_positions']
-            entry['holdings'] = cache[addr]['holdings']
-
-
-# ── Formatting ─────────────────────────────────────────────────────────────────
-
-def fmt_usd(value: float) -> str:
-    abs_val = abs(value)
-    if abs_val >= 1_000_000_000:
-        s = f"${abs_val / 1_000_000_000:.2f}B"
-    elif abs_val >= 1_000_000:
-        s = f"${abs_val / 1_000_000:.2f}M"
-    elif abs_val >= 1_000:
-        s = f"${abs_val / 1_000:.1f}K"
-    else:
-        s = f"${abs_val:,.0f}"
-    return f"-{s}" if value < 0 else s
-
-
-def fmt_pnl(value: float) -> str:
-    text = fmt_usd(value)
-    color = "green" if value >= 0 else "red"
-    return f"[{color}]{text}[/{color}]"
-
-
-def fmt_perp_positions(positions: list) -> str:
-    positions = [p for p in positions if p['notional'] >= MIN_PERP_NOTIONAL]
-    if not positions:
-        return "—"
-    parts = []
-    for p in positions:
-        direction = "[green]L[/green]" if p['long'] else "[red]S[/red]"
-        upnl_color = "green" if p['unrealized_pnl'] >= 0 else "red"
-        upnl = f"[{upnl_color}]{fmt_usd(p['unrealized_pnl'])}[/{upnl_color}]"
-        parts.append(f"{direction} {p['coin']} {fmt_usd(p['notional'])} ({upnl})")
-    return "\n".join(parts)
-
-
-def build_table(lb_data, status: str = ""):
-    perps_on = show_perps.is_set()
-    perp_hint = "[dim][p] hide perps[/dim]" if perps_on else "[dim][p] show perps[/dim]"
-    hint_sep = "   "
-    title = f"🏆 Hyperliquid Top 10{hint_sep}{perp_hint}" + (f"   {status}" if status else "")
-    table = Table(title=title, style="bold cyan", expand=True)
-    table.add_column("#", justify="center", style="dim", width=3)
-    table.add_column("Username", min_width=14)
-    table.add_column("All-Time Vol", justify="right", min_width=12)
-    table.add_column("30d PnL", justify="right", min_width=10)
-    table.add_column("Acct Value", justify="right", min_width=10)
-    table.add_column("Lifetime PnL", justify="right", min_width=12)
-    if perps_on:
-        table.add_column("Open Perps", min_width=24)
-    table.add_column("Spot / USDC", min_width=18)
-
-    for i, entry in enumerate(lb_data[:10], start=1):
-        performances = {p[0]: p[1] for p in entry.get("windowPerformances", [])}
-        username = entry.get("displayName") or f"{entry.get('ethAddress', 'N/A')[:8]}…{entry.get('ethAddress', 'N/A')[-6:]}"
-        volume   = fmt_usd(float(performances.get('allTime', {}).get('vlm', '0')))
-        pnl      = fmt_pnl(float(performances.get('month',   {}).get('pnl', '0')))
-        acct     = fmt_usd(float(entry.get('accountValue', '0')))
-        lifetime = fmt_pnl(float(performances.get('allTime', {}).get('pnl', '0')))
-        holdings = entry.get('holdings', '—')
-        if perps_on:
-            perps = fmt_perp_positions(entry.get('perp_positions', []))
-            table.add_row(str(i), username, volume, pnl, acct, lifetime, perps, holdings)
-        else:
-            table.add_row(str(i), username, volume, pnl, acct, lifetime, holdings)
-
-    return table
-
-
-# ── Fills ──────────────────────────────────────────────────────────────────────
-
-def fetch_recent_fills(address: str, limit: int = FILLS_ON_STARTUP) -> list:
-    try:
-        fills = query_info({"type": "userFills", "user": address})
-        if not fills:
-            return []
-        fills.sort(key=lambda f: f.get('time', 0), reverse=True)
-        # Fetch extra so we have enough after filtering by MIN_FILL_VALUE
-        return fills[:limit * 5]
-    except Exception as e:
-        logging.error("Failed to fetch fills for %s: %s", address, e)
-        return []
-
-
-def print_startup_fills(lb_data: list):
-    console.print(f"\n[bold cyan]📋 Recent fills for top wallets (≥{fmt_usd(MIN_FILL_VALUE)}, last {FILLS_ON_STARTUP} each)[/bold cyan]")
-    for i, entry in enumerate(lb_data[:10], start=1):
-        address = entry.get('ethAddress', '').lower()
-        if not address:
-            continue
-        username = entry.get("displayName") or f"{entry['ethAddress'][:8]}…{entry['ethAddress'][-6:]}"
-        all_fills = fetch_recent_fills(address)
-        fills = [f for f in all_fills if float(f.get('px', 0)) * float(f.get('sz', 0)) >= MIN_FILL_VALUE][:FILLS_ON_STARTUP]
-        if not fills:
-            continue
-        console.print(f"\n  [bold]#{i} {username}[/bold]")
-        for fill in fills:
-            ts = datetime.fromtimestamp(fill.get('time', 0) / 1000).strftime("%m/%d %H:%M")
-            coin       = fill.get('coin', '?')
-            side       = fill.get('side', '?')
-            px         = float(fill.get('px', 0))
-            sz         = float(fill.get('sz', 0))
-            value      = px * sz
-            closed_pnl = float(fill.get('closedPnl', 0))
-            side_str   = "BUY " if side == 'B' else "SELL"
-            color      = "green" if side == 'B' else "red"
-            pnl_str    = f"  pnl {fmt_pnl(closed_pnl)}" if closed_pnl != 0 else ""
-            console.print(f"    [{color}]{ts}  {side_str}  {coin:6}  {sz} @ {px}  ({fmt_usd(value)}){pnl_str}[/{color}]")
-    console.print()
-
-
-# ── Keyboard ───────────────────────────────────────────────────────────────────
-
-shutdown_event = threading.Event()
-show_perps = threading.Event()
-show_perps.set()  # visible by default
-
-
-def keyboard_listener():
-    """Background thread: press 'p' to toggle perp column, 'q'/Ctrl-C to quit."""
-    fd = sys.stdin.fileno()
-    old = termios.tcgetattr(fd)
-    try:
-        tty.setraw(fd)
-        while not shutdown_event.is_set():
-            r, _, _ = select.select([sys.stdin], [], [], 0.5)
-            if r:
-                ch = sys.stdin.read(1)
-                if ch == 'p':
-                    if show_perps.is_set():
-                        show_perps.clear()
-                    else:
-                        show_perps.set()
-                elif ch in ('q', '\x03'):  # q or Ctrl-C
-                    shutdown_event.set()
-                    break
+        data = response.json()
+        lb = data.get('leaderboardRows', data.get('data', data)) if isinstance(data, dict) else data
+        return lb if isinstance(lb, list) else []
     except Exception:
-        pass
-    finally:
-        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+        return []
 
-
-def ws_thread(top_accounts_shared):
-    def on_message(ws, message):
-        try:
-            msg = json.loads(message)
-            if msg.get("channel") == "trades":
-                for trade in msg.get("data", []):
-                    buyer, seller = trade.get("users", [None, None])
-                    if not buyer or not seller:
-                        continue
-                    buyer_lower = buyer.lower()
-                    seller_lower = seller.lower()
-                    px = float(trade.get("px", 0))
-                    sz = float(trade.get("sz", 0))
-                    value = px * sz
-                    coin = trade.get("coin", "Unknown")
-                    if value > LARGE_TRADE_THRESHOLD:
-                        for addr, side in [(buyer_lower, "buy"), (seller_lower, "sell")]:
-                            if addr in top_accounts_shared:
-                                acc = top_accounts_shared[addr]
-                                ts = datetime.now().strftime("%H:%M:%S")
-                                console.print(f"[bold red][{ts}] Large {side.upper()} trade by top account {acc['username']} (Rank {acc['rank']}): {coin} {sz} @ {px} value {value:,.0f} USD[/bold red]")
-        except json.JSONDecodeError:
-            print("Invalid JSON:", message)
-
-    def on_error(ws, error):
-        console.print(f"[red]WebSocket Error:[/red] {error}")
-
-    def on_close(ws, close_status_code, close_msg):
-        console.print("[yellow]WebSocket closed.[/yellow]")
-
-    def on_open(ws):
-        info = Info(constants.MAINNET_API_URL, skip_ws=True)
-        try:
-            meta = info.meta()
-            coins = [asset['name'] for asset in meta.get('universe', [])]
-            for coin in coins:
-                ws.send(json.dumps({"method": "subscribe", "subscription": {"type": "trades", "coin": coin}}))
-            console.print(f"[green]Subscribed to trades for {len(coins)} coins.[/green]")
-        except Exception as e:
-            console.print(f"[red]Error subscribing to trades:[/red] {e}")
-
-    ws_url = "wss://api.hyperliquid.xyz/ws"
-    ws = websocket.WebSocketApp(ws_url, on_open=on_open, on_message=on_message,
-                                on_error=on_error, on_close=on_close)
-    ws.run_forever(ping_interval=20, ping_timeout=10)
-    shutdown_event.wait()
-    ws.close()
-
-
-# ── Main ───────────────────────────────────────────────────────────────────────
 
 def enrich_wallet(entry: dict, address: str, mids: dict):
-    """Fetch and attach perp_positions + holdings to a single leaderboard entry."""
     account_value = float(entry.get('accountValue', '0'))
     if account_value == 0:
         entry['holdings'] = '—'
@@ -303,12 +63,8 @@ def enrich_wallet(entry: dict, address: str, mids: dict):
     notional_by_coin = defaultdict(float)
     perp_positions = []
 
-    sub_accounts = query_info({"type": "subAccounts", "user": address})
-    if sub_accounts is None:
-        sub_accounts = []
-    all_addresses = [address] + [s['subAccountUser'] for s in sub_accounts]
-
-    for sub_address in all_addresses:
+    sub_accounts = query_info({"type": "subAccounts", "user": address}) or []
+    for sub_address in [address] + [s['subAccountUser'] for s in sub_accounts]:
         state = query_info({"type": "clearinghouseState", "user": sub_address})
 
         for pos in state.get('assetPositions', []):
@@ -323,14 +79,11 @@ def enrich_wallet(entry: dict, address: str, mids: dict):
             unrealized_pnl = float(position.get('unrealizedPnl', '0'))
             notional_by_coin[coin] += notional
             perp_positions.append({
-                'coin': coin,
-                'long': szi > 0,
-                'notional': notional,
-                'unrealized_pnl': unrealized_pnl,
+                'coin': coin, 'long': szi > 0,
+                'notional': notional, 'unrealized_pnl': unrealized_pnl,
             })
 
-        withdrawable = float(state.get('withdrawable', '0'))
-        notional_by_coin['USDC'] += withdrawable
+        notional_by_coin['USDC'] += float(state.get('withdrawable', '0'))
 
         spot_state = query_info({"type": "spotClearinghouseState", "user": sub_address})
         for balance in spot_state.get('balances', []):
@@ -338,103 +91,342 @@ def enrich_wallet(entry: dict, address: str, mids: dict):
             total = float(balance.get('total', '0'))
             if total <= 0:
                 continue
-            if coin == 'USDC':
-                notional_by_coin['USDC'] += total
-            else:
-                price = float(mids.get(coin, '0'))
-                notional_by_coin[coin] += total * price
+            notional_by_coin[coin] += total if coin == 'USDC' else total * float(mids.get(coin, '0'))
 
     perp_positions.sort(key=lambda p: p['notional'], reverse=True)
     entry['perp_positions'] = perp_positions
 
     perp_coins = {p['coin'] for p in perp_positions}
-    spot_holdings = []
-    for coin, notional in sorted(notional_by_coin.items()):
-        if coin in perp_coins:
-            continue
-        perc = (notional / account_value) * 100 if account_value > 0 else 0
-        if perc >= 1:
-            spot_holdings.append(f"{coin}({perc:.0f}%)")
+    spot_holdings = [
+        f"{coin}({(n/account_value*100):.0f}%)"
+        for coin, n in sorted(notional_by_coin.items())
+        if coin not in perp_coins and (n / account_value * 100) >= 1
+    ]
     entry['holdings'] = ', '.join(spot_holdings) or '—'
 
 
-def main():
-    console.print("[bold yellow]Starting Hyperliquid Tracker...[/bold yellow]")
-    info = Info(constants.MAINNET_API_URL, skip_ws=True)
-    top_accounts_shared = {}
-    ws_t = threading.Thread(target=ws_thread, args=(top_accounts_shared,), daemon=True)
-    ws_t.start()
-    kb_t = threading.Thread(target=keyboard_listener, daemon=True)
-    kb_t.start()
+# ── Cache ──────────────────────────────────────────────────────────────────────
 
-    # Load and display cache immediately
-    cache, saved_at = load_cache()
-    first_run = True
-
+def save_cache(lb_data: list):
+    wallets = {
+        entry['ethAddress'].lower(): {
+            'perp_positions': entry.get('perp_positions', []),
+            'holdings': entry.get('holdings', '—'),
+        }
+        for entry in lb_data[:10]
+        if entry.get('ethAddress')
+    }
     try:
-        while not shutdown_event.is_set():
-            lb_data = fetch_leaderboard()
-            if not lb_data:
-                console.print("[yellow]No leaderboard data received.[/yellow]")
-            else:
-                top_accounts = {}
-                mids = info.all_mids()
+        with open(CACHE_FILE, 'w') as f:
+            json.dump({'saved_at': time.time(), 'wallets': wallets}, f)
+    except Exception as e:
+        logging.warning("Cache save failed: %s", e)
 
-                # On first cycle: seed table from cache so it shows instantly
-                if first_run and cache:
-                    inject_cache(lb_data, cache)
-                    age = datetime.fromtimestamp(saved_at).strftime("%m/%d %H:%M") if saved_at else "?"
-                    console.clear()
-                    console.print(build_table(lb_data, f"[dim](cached {age} — refreshing...)[/dim]"))
 
-                for i, entry in enumerate(lb_data[:10]):
-                    address = entry.get('ethAddress', '').lower()
-                    if not address:
+def load_cache() -> tuple[dict, float | None]:
+    try:
+        with open(CACHE_FILE) as f:
+            data = json.load(f)
+        return data.get('wallets', {}), data.get('saved_at')
+    except FileNotFoundError:
+        return {}, None
+    except Exception as e:
+        logging.warning("Cache load failed: %s", e)
+        return {}, None
+
+
+def inject_cache(lb_data: list, cache: dict):
+    for entry in lb_data[:10]:
+        addr = entry.get('ethAddress', '').lower()
+        if addr in cache and 'perp_positions' not in entry:
+            entry['perp_positions'] = cache[addr]['perp_positions']
+            entry['holdings']       = cache[addr]['holdings']
+
+
+# ── Formatting ─────────────────────────────────────────────────────────────────
+
+def fmt_usd(value: float) -> str:
+    abs_val = abs(value)
+    if   abs_val >= 1_000_000_000: s = f"${abs_val/1_000_000_000:.2f}B"
+    elif abs_val >= 1_000_000:     s = f"${abs_val/1_000_000:.2f}M"
+    elif abs_val >= 1_000:         s = f"${abs_val/1_000:.1f}K"
+    else:                          s = f"${abs_val:,.0f}"
+    return f"-{s}" if value < 0 else s
+
+
+def fmt_pnl_text(value: float) -> Text:
+    return Text(fmt_usd(value), style="green" if value >= 0 else "red")
+
+
+# ── Textual App ────────────────────────────────────────────────────────────────
+
+COL_KEYS = ["rank", "username", "vol", "pnl_30d", "acct", "lifetime", "perps", "spot"]
+
+CSS = """
+Screen {
+    layout: vertical;
+}
+
+DataTable#summary {
+    height: 1fr;
+}
+
+ScrollableContainer#perp-panel {
+    height: 14;
+    border: solid $accent;
+    padding: 0 1;
+}
+
+ScrollableContainer#perp-panel.hidden {
+    display: none;
+}
+"""
+
+
+class HyperliquidTracker(App):
+    TITLE   = "🏆 Hyperliquid Top 10"
+    CSS     = CSS
+    BINDINGS = [
+        Binding("q", "quit",           "Quit"),
+        Binding("p", "toggle_perps",   "Toggle Perps"),
+        Binding("r", "manual_refresh", "Refresh"),
+    ]
+
+    def __init__(self):
+        super().__init__()
+        self._lb_data: list       = []
+        self._top_accounts: dict  = {}
+        self._info                = None
+        self._shutdown            = threading.Event()
+
+    # ── Layout ─────────────────────────────────────────────────────────────────
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield DataTable(id="summary", cursor_type="row", zebra_stripes=True)
+        with ScrollableContainer(id="perp-panel"):
+            yield Static(id="perp-content")
+        yield Footer()
+
+    def on_mount(self) -> None:
+        dt = self.query_one("#summary", DataTable)
+        dt.add_column("#",            key="rank",     width=4)
+        dt.add_column("Username",     key="username", width=22)
+        dt.add_column("All-Time Vol", key="vol",      width=14)
+        dt.add_column("30d PnL",      key="pnl_30d",  width=12)
+        dt.add_column("Acct Value",   key="acct",     width=12)
+        dt.add_column("Lifetime PnL", key="lifetime", width=14)
+        dt.add_column("Perps",        key="perps",    width=20)
+        dt.add_column("Spot / USDC",  key="spot",     width=22)
+
+        self._info = Info(constants.MAINNET_API_URL, skip_ws=True)
+        threading.Thread(target=self._ws_worker, daemon=True).start()
+        self.do_refresh()
+        self.set_interval(REFRESH_INTERVAL, self.do_refresh)
+
+    async def on_unmount(self) -> None:
+        self._shutdown.set()
+
+    # ── Data refresh ───────────────────────────────────────────────────────────
+
+    @work(thread=True)
+    def do_refresh(self) -> None:
+        self.call_from_thread(self._set_status, "fetching leaderboard...")
+        lb_data = fetch_leaderboard()
+        if not lb_data:
+            self.call_from_thread(self._set_status, "⚠ no leaderboard data")
+            return
+
+        cache, saved_at = load_cache()
+        if cache:
+            inject_cache(lb_data, cache)
+            age = datetime.fromtimestamp(saved_at).strftime("%m/%d %H:%M") if saved_at else "?"
+            self.call_from_thread(self._init_table, lb_data, f"cached {age} — refreshing...")
+        else:
+            self.call_from_thread(self._init_table, lb_data, "fetching wallet data...")
+
+        mids         = self._info.all_mids()
+        top_accounts = {}
+
+        for i, entry in enumerate(lb_data[:10]):
+            address = entry.get('ethAddress', '').lower()
+            if not address:
+                continue
+            username = entry.get("displayName") or f"{entry['ethAddress'][:8]}…{entry['ethAddress'][-6:]}"
+            top_accounts[address] = {'username': username, 'rank': i + 1}
+
+            remaining = 9 - i
+            self.call_from_thread(
+                self._set_status,
+                f"fetching {i+1}/10: {username}..." + (f"  ({remaining} left)" if remaining else "")
+            )
+            try:
+                enrich_wallet(entry, address, mids)
+            except Exception as e:
+                logging.error("enrich error %s: %s", username, e)
+                entry.setdefault('perp_positions', [])
+                entry.setdefault('holdings', 'Error')
+
+            self.call_from_thread(self._update_row, i, entry)
+
+        self._lb_data      = lb_data
+        self._top_accounts = top_accounts
+        save_cache(lb_data)
+        ts = datetime.now().strftime("%H:%M:%S")
+        self.call_from_thread(self._set_status, f"live {ts}")
+
+    # ── Table helpers ──────────────────────────────────────────────────────────
+
+    def _init_table(self, lb_data: list, status: str = "") -> None:
+        dt = self.query_one("#summary", DataTable)
+        dt.clear()
+        for i, entry in enumerate(lb_data[:10], start=1):
+            dt.add_row(*self._entry_to_row(i, entry), key=str(i))
+        self.sub_title = status
+        if lb_data:
+            self._update_perp_panel(lb_data[0])
+
+    def _update_row(self, idx: int, entry: dict) -> None:
+        dt      = self.query_one("#summary", DataTable)
+        row_key = str(idx + 1)
+        values  = self._entry_to_row(idx + 1, entry)
+        for col_key, value in zip(COL_KEYS, values):
+            try:
+                dt.update_cell(row_key, col_key, value, update_width=False)
+            except Exception:
+                pass
+        # Refresh detail panel if this row is selected
+        try:
+            if dt.cursor_row == idx:
+                self._update_perp_panel(entry)
+        except Exception:
+            pass
+
+    def _entry_to_row(self, rank: int, entry: dict) -> tuple:
+        perf     = {p[0]: p[1] for p in entry.get("windowPerformances", [])}
+        username = (entry.get("displayName") or
+                    f"{entry.get('ethAddress','N/A')[:8]}…{entry.get('ethAddress','N/A')[-6:]}")
+        vol      = fmt_usd(float(perf.get('allTime', {}).get('vlm', '0')))
+        pnl_30d  = fmt_pnl_text(float(perf.get('month',   {}).get('pnl', '0')))
+        acct     = fmt_usd(float(entry.get('accountValue', '0')))
+        lifetime = fmt_pnl_text(float(perf.get('allTime', {}).get('pnl', '0')))
+
+        sig = [p for p in entry.get('perp_positions', []) if p['notional'] >= MIN_PERP_NOTIONAL]
+        if sig:
+            net_upnl  = sum(p['unrealized_pnl'] for p in sig)
+            perp_cell = Text()
+            perp_cell.append(f"{len(sig)} pos  ", style="dim")
+            perp_cell.append(fmt_usd(net_upnl), style="green" if net_upnl >= 0 else "red")
+        else:
+            perp_cell = Text("—", style="dim")
+
+        spot = entry.get('holdings', '—')
+        return (str(rank), username, vol, pnl_30d, acct, lifetime, perp_cell, spot)
+
+    # ── Perp detail panel ──────────────────────────────────────────────────────
+
+    @on(DataTable.RowHighlighted, "#summary")
+    def on_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
+        if event.row_key is None or not self._lb_data:
+            return
+        try:
+            self._update_perp_panel(self._lb_data[int(str(event.row_key)) - 1])
+        except (ValueError, IndexError):
+            pass
+
+    def _update_perp_panel(self, entry: dict) -> None:
+        username  = (entry.get("displayName") or
+                     f"{entry.get('ethAddress','N/A')[:8]}…{entry.get('ethAddress','N/A')[-6:]}")
+        positions = [p for p in entry.get('perp_positions', []) if p['notional'] >= MIN_PERP_NOTIONAL]
+        content   = self.query_one("#perp-content", Static)
+
+        if not positions:
+            content.update(f"[dim]{username}  —  no significant open positions[/dim]")
+            return
+
+        total_notional = sum(p['notional']      for p in positions)
+        net_upnl       = sum(p['unrealized_pnl'] for p in positions)
+        upnl_style     = "green" if net_upnl >= 0 else "red"
+
+        t = RichTable(
+            title=(f"[bold]{username}[/bold]  ·  {len(positions)} positions  ·  "
+                   f"{fmt_usd(total_notional)} notional  ·  "
+                   f"net uPnL [{upnl_style}]{fmt_usd(net_upnl)}[/{upnl_style}]"),
+            expand=True, box=None, show_edge=False, padding=(0, 1),
+        )
+        t.add_column("Dir",      width=3)
+        t.add_column("Coin",     min_width=8)
+        t.add_column("Notional", justify="right", min_width=10)
+        t.add_column("uPnL",     justify="right", min_width=10)
+
+        for p in positions:
+            upnl = p['unrealized_pnl']
+            t.add_row(
+                Text("L", style="bold green") if p['long'] else Text("S", style="bold red"),
+                p['coin'],
+                fmt_usd(p['notional']),
+                Text(fmt_usd(upnl), style="green" if upnl >= 0 else "red"),
+            )
+
+        content.update(t)
+
+    # ── Actions ────────────────────────────────────────────────────────────────
+
+    def action_toggle_perps(self) -> None:
+        self.query_one("#perp-panel").toggle_class("hidden")
+
+    def action_manual_refresh(self) -> None:
+        self.do_refresh()
+
+    def _set_status(self, msg: str) -> None:
+        self.sub_title = msg
+
+    # ── WebSocket ──────────────────────────────────────────────────────────────
+
+    def _ws_worker(self) -> None:
+        def on_message(ws, message):
+            try:
+                msg = json.loads(message)
+                if msg.get("channel") != "trades":
+                    return
+                for trade in msg.get("data", []):
+                    buyer, seller = trade.get("users", [None, None])
+                    if not buyer or not seller:
                         continue
-                    username = entry.get("displayName") or f"{entry['ethAddress'][:8]}…{entry['ethAddress'][-6:]}"
-                    top_accounts[address] = {'username': username, 'rank': i + 1}
-                    console.print(f"[dim]Fetching wallet {i+1}/10: {username}...[/dim]")
-                    try:
-                        enrich_wallet(entry, address, mids)
-                    except KeyboardInterrupt:
-                        raise
-                    except Exception as e:
-                        console.print(f"[red]Error fetching state for {username}: {e}[/red]")
-                        if 'perp_positions' not in entry:
-                            entry['holdings'] = 'Error'
-                            entry['perp_positions'] = []
+                    value = float(trade.get("px", 0)) * float(trade.get("sz", 0))
+                    coin  = trade.get("coin", "?")
+                    if value > LARGE_TRADE_THRESHOLD:
+                        for addr, side in [(buyer.lower(), "BUY"), (seller.lower(), "SELL")]:
+                            if addr in self._top_accounts:
+                                acc  = self._top_accounts[addr]
+                                text = (f"🐋 {acc['username']} (#{acc['rank']}) "
+                                        f"{side} {coin}  {fmt_usd(value)}")
+                                self.call_from_thread(
+                                    self.notify, text, severity="warning", timeout=8
+                                )
+            except Exception:
+                pass
 
-                    # Redraw table after each wallet completes so progress is visible
-                    remaining = 10 - (i + 1)
-                    status = f"[dim](updating... {remaining} wallet{'s' if remaining != 1 else ''} remaining)[/dim]" if remaining else ""
-                    console.clear()
-                    console.print(build_table(lb_data, status))
+        def on_open(ws):
+            try:
+                meta  = Info(constants.MAINNET_API_URL, skip_ws=True).meta()
+                coins = [a['name'] for a in meta.get('universe', [])]
+                for coin in coins:
+                    ws.send(json.dumps({
+                        "method": "subscribe",
+                        "subscription": {"type": "trades", "coin": coin}
+                    }))
+            except Exception:
+                pass
 
-                top_accounts_shared.clear()
-                top_accounts_shared.update(top_accounts)
-
-                # Final clean display with live timestamp
-                ts = datetime.now().strftime("%H:%M:%S")
-                console.clear()
-                console.print(build_table(lb_data, f"[dim](live {ts})[/dim]"))
-                save_cache(lb_data)
-
-                if first_run:
-                    console.print("[dim]Fetching recent fills...[/dim]")
-                    print_startup_fills(lb_data)
-                    first_run = False
-
-            for _ in range(REFRESH_INTERVAL * 10):
-                if shutdown_event.is_set():
-                    break
-                time.sleep(0.1)
-
-    except KeyboardInterrupt:
-        pass
-    finally:
-        shutdown_event.set()
-        console.print("[bold yellow]Shutting down... GG.[/bold yellow]")
+        ws_url = "wss://api.hyperliquid.xyz/ws"
+        while not self._shutdown.is_set():
+            ws = websocket.WebSocketApp(ws_url, on_open=on_open, on_message=on_message)
+            ws.run_forever(ping_interval=20, ping_timeout=10)
+            if not self._shutdown.is_set():
+                time.sleep(5)  # reconnect delay
 
 
 if __name__ == "__main__":
-    main()
+    logging.basicConfig(level=logging.WARNING)
+    HyperliquidTracker().run()
