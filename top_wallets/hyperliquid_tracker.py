@@ -211,7 +211,8 @@ class HyperliquidTracker(App):
         self._lb_data: list      = []
         self._top_accounts: dict = {}
         self._info               = None
-        self._shutdown           = threading.Event()
+        self._stop_event           = threading.Event()
+        self._ws: websocket.WebSocketApp | None = None
 
     # ── Layout ─────────────────────────────────────────────────────────────────
 
@@ -252,7 +253,9 @@ class HyperliquidTracker(App):
         self.set_interval(REFRESH_INTERVAL, self.do_refresh)
 
     async def on_unmount(self) -> None:
-        self._shutdown.set()
+        self._stop_event.set()
+        if self._ws:
+            self._ws.close()
 
     # ── Data refresh ───────────────────────────────────────────────────────────
 
@@ -459,10 +462,11 @@ class HyperliquidTracker(App):
                 pass
 
         ws_url = "wss://api.hyperliquid.xyz/ws"
-        while not self._shutdown.is_set():
-            websocket.WebSocketApp(ws_url, on_open=on_open, on_message=on_message
-                                   ).run_forever(ping_interval=20, ping_timeout=10)
-            if not self._shutdown.is_set():
+        while not self._stop_event.is_set():
+            self._ws = websocket.WebSocketApp(ws_url, on_open=on_open, on_message=on_message)
+            self._ws.run_forever(ping_interval=20, ping_timeout=10)
+            self._ws = None
+            if not self._stop_event.is_set():
                 time.sleep(5)
 
 
