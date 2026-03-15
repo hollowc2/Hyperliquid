@@ -70,12 +70,14 @@ def enrich_wallet(entry: dict, address: str, mids: dict):
             szi = float(p.get('szi', '0'))
             if szi == 0:
                 continue
-            notional      = abs(float(p.get('positionValue', '0')))
+            notional       = abs(float(p.get('positionValue', '0')))
             unrealized_pnl = float(p.get('unrealizedPnl', '0'))
+            entry_px       = float(p.get('entryPx', '0'))
             notional_by_coin[coin] += notional
             perp_positions.append({
                 'coin': coin, 'long': szi > 0,
                 'notional': notional, 'unrealized_pnl': unrealized_pnl,
+                'entry_px': entry_px,
             })
         notional_by_coin['USDC'] += float(state.get('withdrawable', '0'))
 
@@ -244,6 +246,7 @@ class HyperliquidTracker(App):
             pdt = self.query_one(f"#perp-{i}", DataTable)
             pdt.add_column("Dir",      key="dir",      width=3)
             pdt.add_column("Coin",     key="coin",     width=10)
+            pdt.add_column("Entry",    key="entry",    width=16)
             pdt.add_column("Notional", key="notional", width=14)
             pdt.add_column("uPnL",     key="upnl",     width=14)
 
@@ -371,10 +374,12 @@ class HyperliquidTracker(App):
                      if p['notional'] >= MIN_PERP_NOTIONAL]
         pdt.clear()
         for p in positions:
-            upnl = p['unrealized_pnl']
+            upnl     = p['unrealized_pnl']
+            entry_px = p.get('entry_px', 0)
             pdt.add_row(
                 Text("L", style="bold green") if p['long'] else Text("S", style="bold red"),
                 p['coin'],
+                f"${entry_px:,.4f}".rstrip('0').rstrip('.') if entry_px else "—",
                 fmt_usd(p['notional']),
                 Text(fmt_usd(upnl), style="green" if upnl >= 0 else "red"),
             )
