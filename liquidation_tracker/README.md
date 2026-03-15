@@ -1,7 +1,14 @@
-# Hyperliquid Liquidation Tracker - Research Summary
+# Hyperliquid Liquidation Tracker
+
+> **Status: Pre-implementation — research & planning only. No code has been written yet.**
 
 ## Project Goal
 Implement a fully asynchronous Python service that captures liquidation events in real-time from Hyperliquid, normalizes them into a canonical format, stores raw events in JSONL format, maintains rolling aggregates across multiple time windows (1m, 5m, 15m, 1h), and exposes data via an internal interface.
+
+**This repo currently contains only:**
+- Research findings on available data sources and constraints
+- Architecture decision options (pending selection)
+- A full software spec ready to implement once an approach is chosen
 
 **Reference Documents:**
 - `docs/hyperliquid_liquidation_outline.md` - Complete software specification
