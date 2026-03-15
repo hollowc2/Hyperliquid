@@ -316,6 +316,7 @@ class HyperliquidTracker(App):
     # ── Summary table ──────────────────────────────────────────────────────────
 
     def _init_summary(self, lb_data: list, status: str = "") -> None:
+        self._lb_data = lb_data  # available immediately for row navigation
         dt = self.query_one("#summary", DataTable)
         dt.clear()
         for i, entry in enumerate(lb_data[:10], start=1):
