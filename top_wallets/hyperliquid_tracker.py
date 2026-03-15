@@ -60,7 +60,28 @@ def enrich_wallet(entry: dict, address: str, mids: dict):
     perp_positions   = []
 
     sub_accounts = query_info({"type": "subAccounts", "user": address}) or []
-    for sub_addr in [address] + [s['subAccountUser'] for s in sub_accounts]:
+    all_addresses = [address] + [s['subAccountUser'] for s in sub_accounts]
+
+    # Collect trigger orders (stop/TP) keyed by coin
+    trigger_map: dict[str, list] = {}
+    for sub_addr in all_addresses:
+        try:
+            orders = query_info({"type": "frontendOpenOrders", "user": sub_addr}) or []
+            for o in orders:
+                if not o.get('isTrigger'):
+                    continue
+                coin = o.get('coin')
+                if not coin:
+                    continue
+                trigger_map.setdefault(coin, []).append({
+                    'px':        float(o.get('triggerPx', '0')),
+                    'side':      o.get('side', ''),        # 'A'=sell 'B'=buy
+                    'condition': o.get('triggerCondition', ''),
+                })
+        except Exception:
+            pass
+
+    for sub_addr in all_addresses:
         state = query_info({"type": "clearinghouseState", "user": sub_addr})
         for pos in state.get('assetPositions', []):
             p    = pos.get('position', {})
@@ -73,11 +94,38 @@ def enrich_wallet(entry: dict, address: str, mids: dict):
             notional       = abs(float(p.get('positionValue', '0')))
             unrealized_pnl = float(p.get('unrealizedPnl', '0'))
             entry_px       = float(p.get('entryPx', '0'))
+            liq_px         = float(p.get('liquidationPx') or '0')
+            lev            = p.get('leverage', {})
+            roe            = float(p.get('returnOnEquity', '0'))
+            mark_px        = notional / abs(szi) if szi else 0
+            dist_liq       = abs(mark_px - liq_px) / mark_px * 100 if mark_px and liq_px else None
+
+            # Match stop / TP from trigger orders
+            is_long   = szi > 0
+            triggers  = trigger_map.get(coin, [])
+            # Long: stop = sell trigger with "<=", TP = sell trigger with ">="
+            # Short: stop = buy trigger with ">=", TP  = buy trigger with "<="
+            stop_side = 'A' if is_long else 'B'
+            tp_side   = 'A' if is_long else 'B'
+            stop_cond = '<=' if is_long else '>='
+            tp_cond   = '>=' if is_long else '<='
+            stop_candidates = [t['px'] for t in triggers if t['side'] == stop_side and stop_cond in t['condition']]
+            tp_candidates   = [t['px'] for t in triggers if t['side'] == tp_side   and tp_cond   in t['condition']]
+            # Pick the closest stop (nearest to mark) and closest TP
+            stop_px = min(stop_candidates, key=lambda x: abs(x - mark_px)) if stop_candidates else None
+            tp_px   = min(tp_candidates,   key=lambda x: abs(x - mark_px)) if tp_candidates   else None
+            dist_stop = abs(mark_px - stop_px) / mark_px * 100 if mark_px and stop_px else None
+
             notional_by_coin[coin] += notional
             perp_positions.append({
-                'coin': coin, 'long': szi > 0,
+                'coin': coin, 'long': is_long,
                 'notional': notional, 'unrealized_pnl': unrealized_pnl,
-                'entry_px': entry_px,
+                'entry_px': entry_px, 'liq_px': liq_px,
+                'lev_value': lev.get('value', 0),
+                'lev_type':  lev.get('type', 'cross'),
+                'roe': roe, 'mark_px': mark_px,
+                'dist_liq': dist_liq,
+                'stop_px': stop_px, 'tp_px': tp_px, 'dist_stop': dist_stop,
             })
         notional_by_coin['USDC'] += float(state.get('withdrawable', '0'))
 
@@ -153,6 +201,17 @@ def fmt_usd(value: float) -> str:
 
 def fmt_pnl(value: float) -> Text:
     return Text(fmt_usd(value), style="green" if value >= 0 else "red")
+
+
+def fmt_price(value: float) -> str:
+    if not value:
+        return "—"
+    if value >= 1000:
+        return f"${value:,.1f}"
+    elif value >= 1:
+        return f"${value:.4f}".rstrip('0').rstrip('.')
+    else:
+        return f"${value:.6f}".rstrip('0').rstrip('.')
 
 
 # ── Constants / keys ───────────────────────────────────────────────────────────
@@ -244,11 +303,18 @@ class HyperliquidTracker(App):
         # Perp detail table columns (one per wallet slot)
         for i in range(1, 11):
             pdt = self.query_one(f"#perp-{i}", DataTable)
-            pdt.add_column("Dir",      key="dir",      width=3)
-            pdt.add_column("Coin",     key="coin",     width=10)
-            pdt.add_column("Entry",    key="entry",    width=16)
-            pdt.add_column("Notional", key="notional", width=14)
-            pdt.add_column("uPnL",     key="upnl",     width=14)
+            pdt.add_column("Dir",       key="dir",       width=3)
+            pdt.add_column("Coin",      key="coin",      width=10)
+            pdt.add_column("Lev",       key="lev",       width=8)
+            pdt.add_column("Entry",     key="entry",     width=14)
+            pdt.add_column("Stop",      key="stop",      width=14)
+            pdt.add_column("Dist Stop", key="dist_stop", width=10)
+            pdt.add_column("TP",        key="tp",        width=14)
+            pdt.add_column("Liq",       key="liq",       width=14)
+            pdt.add_column("Dist Liq",  key="dist_liq",  width=10)
+            pdt.add_column("Notional",  key="notional",  width=12)
+            pdt.add_column("uPnL",      key="upnl",      width=12)
+            pdt.add_column("ROE",       key="roe",       width=8)
 
         self._info = Info(constants.MAINNET_API_URL, skip_ws=True)
         threading.Thread(target=self._ws_worker, daemon=True).start()
@@ -374,14 +440,38 @@ class HyperliquidTracker(App):
                      if p['notional'] >= MIN_PERP_NOTIONAL]
         pdt.clear()
         for p in positions:
-            upnl     = p['unrealized_pnl']
-            entry_px = p.get('entry_px', 0)
+            upnl       = p['unrealized_pnl']
+            roe        = p.get('roe', 0)
+            dist_liq   = p.get('dist_liq')
+            dist_stop  = p.get('dist_stop')
+            lev_type   = p.get('lev_type', 'cross')
+            lev_val    = p.get('lev_value', 0)
+            lev_str    = f"{lev_val}x {'C' if lev_type == 'cross' else 'I'}"
+            # Dist to liq: red if <5%, yellow if <15%, green otherwise
+            if dist_liq is not None:
+                dliq_color = "red" if dist_liq < 5 else ("yellow" if dist_liq < 15 else "green")
+                dliq_text  = Text(f"{dist_liq:.1f}%", style=dliq_color)
+            else:
+                dliq_text = Text("—", style="dim")
+            # Dist to stop: red if <3%, yellow if <10%, green otherwise
+            if dist_stop is not None:
+                dstop_color = "red" if dist_stop < 3 else ("yellow" if dist_stop < 10 else "green")
+                dstop_text  = Text(f"{dist_stop:.1f}%", style=dstop_color)
+            else:
+                dstop_text = Text("—", style="dim")
             pdt.add_row(
                 Text("L", style="bold green") if p['long'] else Text("S", style="bold red"),
                 p['coin'],
-                f"${entry_px:,.4f}".rstrip('0').rstrip('.') if entry_px else "—",
+                lev_str,
+                fmt_price(p.get('entry_px', 0)),
+                fmt_price(p.get('stop_px')),
+                dstop_text,
+                fmt_price(p.get('tp_px')),
+                fmt_price(p.get('liq_px', 0)),
+                dliq_text,
                 fmt_usd(p['notional']),
                 Text(fmt_usd(upnl), style="green" if upnl >= 0 else "red"),
+                Text(f"{roe*100:.1f}%", style="green" if roe >= 0 else "red"),
             )
 
     def _update_perp_header(self, entry: dict) -> None:
