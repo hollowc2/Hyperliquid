@@ -31,7 +31,7 @@ base_url = constants.MAINNET_API_URL
 # ── Data helpers ───────────────────────────────────────────────────────────────
 
 def query_info(msg):
-    r = requests.post(base_url + "/info", json=msg)
+    r = requests.post(base_url + "/info", json=msg, timeout=8)
     if r.status_code == 200:
         return r.json()
     raise Exception(f"HTTP {r.status_code}: {r.text}")
@@ -39,7 +39,7 @@ def query_info(msg):
 
 def fetch_leaderboard() -> list:
     try:
-        r = requests.get("https://stats-data.hyperliquid.xyz/Mainnet/leaderboard")
+        r = requests.get("https://stats-data.hyperliquid.xyz/Mainnet/leaderboard", timeout=10)
         if r.status_code != 200:
             return []
         data = r.json()
@@ -49,7 +49,11 @@ def fetch_leaderboard() -> list:
         return []
 
 
-def enrich_wallet(entry: dict, address: str, mids: dict):
+def enrich_wallet(entry: dict, address: str, mids: dict,
+                  stop_event: threading.Event | None = None):
+    def stopping() -> bool:
+        return stop_event is not None and stop_event.is_set()
+
     account_value = float(entry.get('accountValue', '0'))
     if account_value == 0:
         entry['holdings'] = '—'
@@ -65,6 +69,7 @@ def enrich_wallet(entry: dict, address: str, mids: dict):
     # Collect trigger orders (stop/TP) keyed by coin
     trigger_map: dict[str, list] = {}
     for sub_addr in all_addresses:
+        if stopping(): return
         try:
             orders = query_info({"type": "frontendOpenOrders", "user": sub_addr}) or []
             for o in orders:
@@ -82,6 +87,7 @@ def enrich_wallet(entry: dict, address: str, mids: dict):
             pass
 
     for sub_addr in all_addresses:
+        if stopping(): return
         state = query_info({"type": "clearinghouseState", "user": sub_addr})
         for pos in state.get('assetPositions', []):
             p    = pos.get('position', {})
@@ -352,6 +358,8 @@ class HyperliquidTracker(App):
         top_accounts = {}
 
         for i, entry in enumerate(lb_data[:10]):
+            if self._stop_event.is_set():
+                return
             address = entry.get('ethAddress', '').lower()
             if not address:
                 continue
@@ -366,7 +374,7 @@ class HyperliquidTracker(App):
                 (f"  ({remaining} left)" if remaining else "")
             )
             try:
-                enrich_wallet(entry, address, mids)
+                enrich_wallet(entry, address, mids, self._stop_event)
             except Exception as e:
                 logging.error("enrich %s: %s", username, e)
                 entry.setdefault('perp_positions', [])
