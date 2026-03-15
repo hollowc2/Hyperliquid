@@ -401,7 +401,7 @@ class HyperliquidTracker(App):
         if event.row_key is None or not self._lb_data:
             return
         try:
-            rank  = int(str(event.row_key))
+            rank  = int(event.row_key.value)
             entry = self._lb_data[rank - 1]
             # Instant switch — just shows/hides pre-built tables
             self.query_one("#perp-switcher", ContentSwitcher).current = f"perp-{rank}"
