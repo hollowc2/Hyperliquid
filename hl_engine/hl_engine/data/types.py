@@ -3,6 +3,11 @@ Custom NautilusTrader data types for Hyperliquid-specific market data.
 
 Register with the DataEngine before use:
     engine.register_serializable_type(FundingRateData, ...)
+
+Note: NautilusTrader's Data base class is a Cython extension type.
+Subclasses must:
+  1. Pass ts_event/ts_init to Data.__new__(cls, ts_event, ts_init)
+  2. Override ts_event and ts_init as @property (abstract in Cython base)
 """
 
 from nautilus_trader.core.data import Data
@@ -16,6 +21,9 @@ class FundingRateData(Data):
     Published via activeAssetCtx WebSocket channel.
     """
 
+    def __new__(cls, instrument_id, rate, next_funding_time, open_interest, ts_event, ts_init):
+        return Data.__new__(cls, ts_event, ts_init)
+
     def __init__(
         self,
         instrument_id: InstrumentId,
@@ -25,11 +33,20 @@ class FundingRateData(Data):
         ts_event: int,
         ts_init: int,
     ) -> None:
-        super().__init__(ts_event=ts_event, ts_init=ts_init)
+        self._ts_event = ts_event
+        self._ts_init = ts_init
         self.instrument_id = instrument_id
         self.rate = rate
         self.next_funding_time = next_funding_time
         self.open_interest = open_interest
+
+    @property
+    def ts_event(self) -> int:
+        return self._ts_event
+
+    @property
+    def ts_init(self) -> int:
+        return self._ts_init
 
     def __repr__(self) -> str:
         return (
@@ -49,6 +66,9 @@ class LiquidationData(Data):
     side: "LONG" (long position liquidated) or "SHORT" (short position liquidated).
     """
 
+    def __new__(cls, instrument_id, side, quantity, price, usd_value, ts_event, ts_init):
+        return Data.__new__(cls, ts_event, ts_init)
+
     def __init__(
         self,
         instrument_id: InstrumentId,
@@ -59,12 +79,21 @@ class LiquidationData(Data):
         ts_event: int,
         ts_init: int,
     ) -> None:
-        super().__init__(ts_event=ts_event, ts_init=ts_init)
+        self._ts_event = ts_event
+        self._ts_init = ts_init
         self.instrument_id = instrument_id
         self.side = side  # "LONG" or "SHORT"
         self.quantity = quantity
         self.price = price
         self.usd_value = usd_value
+
+    @property
+    def ts_event(self) -> int:
+        return self._ts_event
+
+    @property
+    def ts_init(self) -> int:
+        return self._ts_init
 
     def __repr__(self) -> str:
         return (
@@ -84,6 +113,9 @@ class OpenInterestData(Data):
     Published via activeAssetCtx WebSocket channel alongside FundingRateData.
     """
 
+    def __new__(cls, instrument_id, open_interest, open_interest_usd, ts_event, ts_init):
+        return Data.__new__(cls, ts_event, ts_init)
+
     def __init__(
         self,
         instrument_id: InstrumentId,
@@ -92,10 +124,19 @@ class OpenInterestData(Data):
         ts_event: int,
         ts_init: int,
     ) -> None:
-        super().__init__(ts_event=ts_event, ts_init=ts_init)
+        self._ts_event = ts_event
+        self._ts_init = ts_init
         self.instrument_id = instrument_id
         self.open_interest = open_interest
         self.open_interest_usd = open_interest_usd
+
+    @property
+    def ts_event(self) -> int:
+        return self._ts_event
+
+    @property
+    def ts_init(self) -> int:
+        return self._ts_init
 
     def __repr__(self) -> str:
         return (

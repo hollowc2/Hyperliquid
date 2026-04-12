@@ -32,7 +32,7 @@ class SlippageModel:
             return 0.0
 
         # Walk the relevant side of the book
-        levels = book.asks(50) if is_buy else book.bids(50)
+        levels = book.asks()[:50] if is_buy else book.bids()[:50]
 
         arrival_px = float(best_ask) if is_buy else float(best_bid)
         remaining = quantity
@@ -41,7 +41,7 @@ class SlippageModel:
 
         for level in levels:
             px = float(level.price)
-            sz = float(level.size)
+            sz = level.size()
             fill = min(remaining, sz)
             total_cost += fill * px
             total_filled += fill
@@ -69,11 +69,11 @@ class SlippageModel:
         if our_size <= 0.0:
             return 0.0
 
-        levels = book.bids(20) if is_buy else book.asks(20)
+        levels = book.bids()[:20] if is_buy else book.asks()[:20]
 
         for level in levels:
             if abs(float(level.price) - price) < 1e-8:
-                level_size = float(level.size)
+                level_size = level.size()
                 # Simple queue model: uniform distribution assumption
                 prob = our_size / (our_size + level_size)
                 return min(1.0, prob)

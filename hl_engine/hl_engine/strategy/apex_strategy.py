@@ -180,17 +180,19 @@ class ApexStrategy(Strategy):
 
         # Subscribe to custom data types
         from nautilus_trader.model.data import DataType
+        from nautilus_trader.model.identifiers import ClientId
+        hl_client_id = ClientId("HYPERLIQUID")
         self.subscribe_data(
             data_type=DataType(FundingRateData, metadata={"instrument_id": self._instrument_id}),
-            client_id=None,
+            client_id=hl_client_id,
         )
         self.subscribe_data(
-            data_type=DataType(LiquidationData),
-            client_id=None,
+            data_type=DataType(LiquidationData, metadata={"instrument_id": self._instrument_id}),
+            client_id=hl_client_id,
         )
         self.subscribe_data(
             data_type=DataType(OpenInterestData, metadata={"instrument_id": self._instrument_id}),
-            client_id=None,
+            client_id=hl_client_id,
         )
 
         # Request historical bars for model warmup (200 bars)
@@ -262,6 +264,10 @@ class ApexStrategy(Strategy):
 
     def on_data(self, data) -> None:
         """Dispatch custom data types to the appropriate model."""
+        from nautilus_trader.model.data import CustomData
+        if isinstance(data, CustomData):
+            data = data.data  # unwrap CustomData wrapper
+
         if isinstance(data, FundingRateData):
             self._funding_model.update_funding(data.rate)
             self._funding_pressure = self._funding_model.compute_pressure(
@@ -291,7 +297,10 @@ class ApexStrategy(Strategy):
         # Update exposure manager with current equity
         account = self.portfolio.account(self._instrument_id.venue)
         if account:
-            self._exposure_manager.update_equity(float(account.balance_total().as_double()))
+            from nautilus_trader.model.currencies import USDC
+            bal = account.balance_total(USDC)
+            if bal is not None:
+                self._exposure_manager.update_equity(float(bal.as_double()))
 
     def on_order_canceled(self, event) -> None:
         """Clear active order tracker on cancel."""
@@ -380,14 +389,16 @@ class ApexStrategy(Strategy):
 
         # Portfolio value for sizing
         account = self.portfolio.account(self._instrument_id.venue)
-        portfolio_value = (
-            float(account.balance_total().as_double())
-            if account
-            else 10_000.0
-        )
+        portfolio_value = 10_000.0
+        if account:
+            from nautilus_trader.model.currencies import USDC
+            bal = account.balance_total(USDC)
+            if bal is not None:
+                portfolio_value = float(bal.as_double())
 
         # Current position for inventory penalty
-        position = self.cache.position_for_instrument(self._instrument_id)
+        open_positions = self.cache.positions_open(instrument_id=self._instrument_id)
+        position = open_positions[0] if open_positions else None
         current_position_usd = 0.0
         if position:
             best_bid = book.best_bid_price()

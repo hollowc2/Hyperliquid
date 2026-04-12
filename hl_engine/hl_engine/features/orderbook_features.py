@@ -17,11 +17,11 @@ class OrderBookFeatures:
         Order Book Imbalance: (bid_vol - ask_vol) / (bid_vol + ask_vol).
         Returns 0.0 if no liquidity on either side.
         """
-        bids = book.bids(depth)
-        asks = book.asks(depth)
+        bids = book.bids()[:depth]
+        asks = book.asks()[:depth]
 
-        bid_vol = sum(float(level.size) for level in bids)
-        ask_vol = sum(float(level.size) for level in asks)
+        bid_vol = sum(float(level.size()) for level in bids)
+        ask_vol = sum(float(level.size()) for level in asks)
 
         total = bid_vol + ask_vol
         if total == 0.0:
@@ -82,10 +82,10 @@ class OrderBookFeatures:
 
         Returns (bid_usd, ask_usd).
         """
-        bids = book.bids(depth_levels)
-        asks = book.asks(depth_levels)
+        bids = book.bids()[:depth_levels]
+        asks = book.asks()[:depth_levels]
 
-        bid_usd = sum(float(lvl.price) * float(lvl.size) for lvl in bids)
-        ask_usd = sum(float(lvl.price) * float(lvl.size) for lvl in asks)
+        bid_usd = sum(float(lvl.price) * lvl.size() for lvl in bids)
+        ask_usd = sum(float(lvl.price) * lvl.size() for lvl in asks)
 
         return bid_usd, ask_usd

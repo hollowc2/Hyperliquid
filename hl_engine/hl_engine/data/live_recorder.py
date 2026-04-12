@@ -162,7 +162,7 @@ class HyperliquidRecorder:
 
     def _write_instruments(self) -> None:
         for instrument in self._instruments.values():
-            self._catalog.write_chunk(data=[instrument], data_cls=type(instrument))
+            self._catalog.write_data(data=[instrument])
         log.info(f"Wrote {len(self._instruments)} instruments to catalog.")
 
     # ------------------------------------------------------------------
@@ -249,12 +249,7 @@ class HyperliquidRecorder:
 
         if is_snapshot:
             deltas.append(
-                OrderBookDelta.clear(
-                    instrument_id=instrument_id,
-                    sequence=0,
-                    ts_event=ts_event,
-                    ts_init=ts_init,
-                )
+                OrderBookDelta.clear(instrument_id, 0, ts_event, ts_init)
             )
 
         for side_idx, side_levels in enumerate(levels[:2]):
@@ -265,22 +260,22 @@ class HyperliquidRecorder:
                 action = BookAction.DELETE if sz == 0.0 else (
                     BookAction.ADD if is_snapshot else BookAction.UPDATE
                 )
-                from nautilus_trader.model.book import BookOrder
+                from nautilus_trader.model.data import BookOrder
                 order = BookOrder(
-                    side=order_side,
-                    price=Price(px, instrument.price_precision),
-                    size=Quantity(sz, instrument.size_precision),
-                    order_id=0,
+                    order_side,
+                    Price(px, instrument.price_precision),
+                    Quantity(sz, instrument.size_precision),
+                    0,
                 )
                 deltas.append(
                     OrderBookDelta(
-                        instrument_id=instrument_id,
-                        action=action,
-                        order=order,
-                        flags=0,
-                        sequence=0,
-                        ts_event=ts_event,
-                        ts_init=ts_init,
+                        instrument_id,
+                        action,
+                        order,
+                        0,
+                        0,
+                        ts_event,
+                        ts_init,
                     )
                 )
 
@@ -290,13 +285,13 @@ class HyperliquidRecorder:
         # Mark the last delta with F_LAST flag
         last = deltas[-1]
         deltas[-1] = OrderBookDelta(
-            instrument_id=last.instrument_id,
-            action=last.action,
-            order=last.order,
-            flags=1,  # F_LAST
-            sequence=last.sequence,
-            ts_event=last.ts_event,
-            ts_init=last.ts_init,
+            last.instrument_id,
+            last.action,
+            last.order,
+            1,  # F_LAST
+            last.sequence,
+            last.ts_event,
+            last.ts_init,
         )
         self._ob_deltas.extend(deltas)
         self._book_initialized.add(coin)
@@ -340,11 +335,7 @@ class HyperliquidRecorder:
         if instrument is None:
             return
 
-        bar_type = BarType(
-            instrument_id=instrument.id,
-            spec=BarSpecification(1, BarAggregation.MINUTE, PriceType.LAST),
-            aggregation_source=0,
-        )
+        bar_type = BarType.from_str(f"{instrument.id}-1-MINUTE-LAST-EXTERNAL")
         ts_event = int(data.get("T", data.get("t", 0))) * 1_000_000  # close time ms → ns
         pp, sp = instrument.price_precision, instrument.size_precision
 
@@ -373,17 +364,17 @@ class HyperliquidRecorder:
         counts: dict[str, int] = {}
 
         if self._ob_deltas:
-            self._catalog.write_chunk(data=self._ob_deltas, data_cls=OrderBookDelta)
+            self._catalog.write_data(data=self._ob_deltas)
             counts["OrderBookDelta"] = len(self._ob_deltas)
             self._ob_deltas.clear()
 
         if self._trade_ticks:
-            self._catalog.write_chunk(data=self._trade_ticks, data_cls=TradeTick)
+            self._catalog.write_data(data=self._trade_ticks)
             counts["TradeTick"] = len(self._trade_ticks)
             self._trade_ticks.clear()
 
         if self._bars:
-            self._catalog.write_chunk(data=self._bars, data_cls=Bar)
+            self._catalog.write_data(data=self._bars)
             counts["Bar"] = len(self._bars)
             self._bars.clear()
 

@@ -18,6 +18,8 @@ from nautilus_trader.live.data_client import LiveMarketDataClient
 from nautilus_trader.model.data import (
     Bar,
     BarType,
+    CustomData,
+    DataType,
     OrderBookDelta,
     OrderBookDeltas,
     TradeTick,
@@ -115,19 +117,22 @@ class HyperliquidLiveMarketDataClient(LiveMarketDataClient):
     # Subscription handlers (called by NautilusTrader engine)
     # ------------------------------------------------------------------
 
-    async def _subscribe_order_book_deltas(self, instrument_id: InstrumentId, **kwargs) -> None:
+    async def _subscribe_order_book_deltas(self, command) -> None:
+        instrument_id = command.instrument_id
         coin = instrument_id.symbol.value.split("-")[0]
         sub = {"method": "subscribe", "subscription": {"type": WS_TYPE_L2_BOOK, "coin": coin}}
         await self._send(sub)
         self._subscriptions[f"l2Book:{coin}"] = sub
 
-    async def _subscribe_trade_ticks(self, instrument_id: InstrumentId, **kwargs) -> None:
+    async def _subscribe_trade_ticks(self, command) -> None:
+        instrument_id = command.instrument_id
         coin = instrument_id.symbol.value.split("-")[0]
         sub = {"method": "subscribe", "subscription": {"type": WS_TYPE_TRADES, "coin": coin}}
         await self._send(sub)
         self._subscriptions[f"trades:{coin}"] = sub
 
-    async def _subscribe_bars(self, bar_type: BarType, **kwargs) -> None:
+    async def _subscribe_bars(self, command) -> None:
+        bar_type: BarType = command.bar_type
         coin = bar_type.instrument_id.symbol.value.split("-")[0]
         interval = self._bar_type_to_interval(bar_type)
         sub = {
@@ -137,8 +142,11 @@ class HyperliquidLiveMarketDataClient(LiveMarketDataClient):
         await self._send(sub)
         self._subscriptions[f"candle:{coin}:{interval}"] = sub
 
-    async def _subscribe_data(self, data_type, instrument_id: Optional[InstrumentId] = None, **kwargs) -> None:
+    async def _subscribe(self, command) -> None:
         from hl_engine.data.types import FundingRateData, LiquidationData, OpenInterestData
+
+        data_type = command.data_type
+        instrument_id: Optional[InstrumentId] = data_type.metadata.get("instrument_id")
 
         if data_type.type in (FundingRateData, OpenInterestData) and instrument_id:
             coin = instrument_id.symbol.value.split("-")[0]
@@ -164,7 +172,9 @@ class HyperliquidLiveMarketDataClient(LiveMarketDataClient):
     # Historical data request
     # ------------------------------------------------------------------
 
-    async def _request_bars(self, bar_type: BarType, limit: int, **kwargs) -> None:
+    async def _request_bars(self, request) -> None:
+        bar_type: BarType = request.bar_type
+        limit: int = int(request.limit or 200)
         coin = bar_type.instrument_id.symbol.value.split("-")[0]
         interval = self._bar_type_to_interval(bar_type)
         now_ms = int(time.time() * 1000)
@@ -186,7 +196,7 @@ class HyperliquidLiveMarketDataClient(LiveMarketDataClient):
 
         bars = [self._parse_candle(c, bar_type, instrument) for c in candles]
         for bar in bars:
-            self._handle_bar(bar)
+            self._handle_data(bar)
 
     # ------------------------------------------------------------------
     # WebSocket receive loop
@@ -252,12 +262,7 @@ class HyperliquidLiveMarketDataClient(LiveMarketDataClient):
 
             if is_snapshot and side_idx == 0:
                 # Emit a CLEAR delta first
-                clear_delta = OrderBookDelta.clear(
-                    instrument_id=instrument_id,
-                    sequence=0,
-                    ts_event=ts_event,
-                    ts_init=ts_init,
-                )
+                clear_delta = OrderBookDelta.clear(instrument_id, 0, ts_event, ts_init)
                 deltas.append(clear_delta)
 
             for level in side_levels:
@@ -266,21 +271,21 @@ class HyperliquidLiveMarketDataClient(LiveMarketDataClient):
                 action = BookAction.DELETE if sz == 0.0 else (
                     BookAction.ADD if is_snapshot else BookAction.UPDATE
                 )
-                from nautilus_trader.model.book import BookOrder
+                from nautilus_trader.model.data import BookOrder
                 order = BookOrder(
-                    side=order_side,
-                    price=Price(px, instrument.price_precision),
-                    size=Quantity(sz, instrument.size_precision),
-                    order_id=0,
+                    order_side,
+                    Price(px, instrument.price_precision),
+                    Quantity(sz, instrument.size_precision),
+                    0,
                 )
                 delta = OrderBookDelta(
-                    instrument_id=instrument_id,
-                    action=action,
-                    order=order,
-                    flags=0,
-                    sequence=0,
-                    ts_event=ts_event,
-                    ts_init=ts_init,
+                    instrument_id,
+                    action,
+                    order,
+                    0,
+                    0,
+                    ts_event,
+                    ts_init,
                 )
                 deltas.append(delta)
 
@@ -288,16 +293,16 @@ class HyperliquidLiveMarketDataClient(LiveMarketDataClient):
             # Mark last delta with F_LAST flag
             last = deltas[-1]
             deltas[-1] = OrderBookDelta(
-                instrument_id=last.instrument_id,
-                action=last.action,
-                order=last.order,
-                flags=1,  # F_LAST
-                sequence=last.sequence,
-                ts_event=last.ts_event,
-                ts_init=last.ts_init,
+                last.instrument_id,
+                last.action,
+                last.order,
+                1,  # F_LAST
+                last.sequence,
+                last.ts_event,
+                last.ts_init,
             )
             for delta in deltas:
-                self._handle_order_book_delta(delta)
+                self._handle_data(delta)
 
         self._book_snapshots[coin] = True
 
@@ -329,7 +334,7 @@ class HyperliquidLiveMarketDataClient(LiveMarketDataClient):
                 ts_event=ts_event,
                 ts_init=self._clock.timestamp_ns(),
             )
-            self._handle_trade_tick(tick)
+            self._handle_data(tick)
 
     def _handle_candle(self, msg: dict) -> None:
         data = msg.get("data", {})
@@ -345,7 +350,7 @@ class HyperliquidLiveMarketDataClient(LiveMarketDataClient):
         interval = data.get("i", "1m")
         bar_type = self._interval_to_bar_type(instrument_id, interval)
         bar = self._parse_candle(data, bar_type, instrument)
-        self._handle_bar(bar)
+        self._handle_data(bar)
 
     def _handle_asset_ctx(self, msg: dict) -> None:
         data = msg.get("data", {})
@@ -367,7 +372,7 @@ class HyperliquidLiveMarketDataClient(LiveMarketDataClient):
             ts_event=ts_event,
             ts_init=ts_init,
         )
-        self._handle_data(funding)
+        self._handle_data(CustomData(DataType(FundingRateData, metadata={"instrument_id": instrument_id}), funding))
 
         # Publish OpenInterestData
         oi = float(ctx.get("openInterest", 0.0))
@@ -379,7 +384,7 @@ class HyperliquidLiveMarketDataClient(LiveMarketDataClient):
             ts_event=ts_event,
             ts_init=ts_init,
         )
-        self._handle_data(oi_data)
+        self._handle_data(CustomData(DataType(OpenInterestData, metadata={"instrument_id": instrument_id}), oi_data))
 
     def _handle_web_data2(self, msg: dict) -> None:
         data = msg.get("data", {})
@@ -407,7 +412,7 @@ class HyperliquidLiveMarketDataClient(LiveMarketDataClient):
                 ts_event=ts_event,
                 ts_init=ts_init,
             )
-            self._handle_data(liq_data)
+            self._handle_data(CustomData(DataType(LiquidationData, metadata={"instrument_id": instrument_id}), liq_data))
 
     # ------------------------------------------------------------------
     # Helpers
@@ -467,5 +472,6 @@ class HyperliquidLiveMarketDataClient(LiveMarketDataClient):
             "1d": (1, BarAggregation.DAY),
         }
         step, agg = _map.get(interval, (1, BarAggregation.MINUTE))
-        spec = BarSpecification(step=step, aggregation=agg, price_type=PriceType.LAST)
-        return BT(instrument_id=instrument_id, spec=spec, aggregation_source=0)
+        from nautilus_trader.model.enums import AggregationSource
+        spec = BarSpecification(step, agg, PriceType.LAST)
+        return BT(instrument_id, spec, AggregationSource.EXTERNAL)
