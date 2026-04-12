@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Virtual environments (we build our own inside Docker)
+venv/
+.venv/
+apex_trader/venv/
+
+# Env / secrets
+.env
+.env.*
+
+# Data — mount as a volume instead
+data/
+
+# Git
+.git/
+.gitignore
+
+# Build artifacts
+*.egg-info/
+dist/
+build/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# macOS
+.DS_Store
+
+# Logs
+*.log

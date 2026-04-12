@@ -1,0 +1,30 @@
+[Unit]
+Description=APEX Algo — Hyperliquid Live Data Recorder
+Documentation=https://github.com/hollowc2/HyperLiquid
+After=docker.service network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+User=ubuntu
+
+# --- Update this path to your clone on the VPS ---
+WorkingDirectory=/home/ubuntu/apex_algo
+
+# Build the image on first start (no-op if already built)
+ExecStartPre=docker compose build --quiet recorder
+
+ExecStart=docker compose up recorder
+ExecStop=docker compose stop recorder
+
+Restart=always
+RestartSec=15
+StartLimitIntervalSec=180
+StartLimitBurst=5
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=apex-recorder
+
+[Install]
+WantedBy=multi-user.target

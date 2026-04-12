@@ -1,0 +1,49 @@
+services:
+
+  # ── Live data recorder ──────────────────────────────────────────────
+  # Streams L2 order book, trade ticks, and 1m bars from Hyperliquid
+  # and writes them to ./data/catalog for backtesting.
+  recorder:
+    build:
+      context: .
+      target: runtime
+    image: apex-algo:latest
+    command: python record_live_data.py
+    env_file: .env                    # HL_RECORD_COINS, HL_CATALOG_PATH, etc.
+    volumes:
+      - ./data:/app/data              # catalog persists on host
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  # ── Historical catalog builder ──────────────────────────────────────
+  # One-shot: fetch historical bars + funding and write to ./data/catalog.
+  # Run with: docker compose run --rm build-catalog
+  build-catalog:
+    build:
+      context: .
+      target: runtime
+    image: apex-algo:latest
+    command: python build_historical_catalog.py
+    env_file: .env
+    volumes:
+      - ./data:/app/data
+    profiles:
+      - tools                         # not started by default; use --profile tools
+
+  # ── Backtest ────────────────────────────────────────────────────────
+  # Run with: docker compose run --rm backtest
+  backtest:
+    build:
+      context: .
+      target: runtime
+    image: apex-algo:latest
+    command: python apex_trader/run_backtest.py
+    env_file: .env
+    volumes:
+      - ./data:/app/data
+    profiles:
+      - tools
