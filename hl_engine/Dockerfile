@@ -120,12 +120,13 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # Copy only what the TS recorder needs.
 # hl_engine is not installed as a package here; we put it on PYTHONPATH
 # by placing the source tree under /app and setting PYTHONPATH=/app.
-COPY hl_engine/data/__init__.py        ./hl_engine/data/__init__.py
 COPY hl_engine/data/timescale_sink.py  ./hl_engine/data/timescale_sink.py
 COPY record_live_ts.py                   ./
 
-# Create a minimal top-level __init__ so `from hl_engine.data...` resolves
-RUN touch ./hl_engine/__init__.py
+# Create minimal __init__ files so `from hl_engine.data...` resolves.
+# Do NOT copy hl_engine/data/__init__.py — it imports NautilusTrader types
+# that are not installed in this lightweight collector image.
+RUN touch ./hl_engine/__init__.py ./hl_engine/data/__init__.py
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=0

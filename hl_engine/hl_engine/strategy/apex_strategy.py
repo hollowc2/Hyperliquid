@@ -141,6 +141,21 @@ class ApexStrategy(Strategy):
         self._funding_pressure: float = 0.0
         self._price_momentum: float = 0.0
 
+        # --- Monitoring state ---
+        self._last_edge: float = 0.0
+        self._last_order_summary: dict = {}
+        self._trade_count: int = 0
+        self._total_commission: float = 0.0
+        self._session_realized_pnl: float = 0.0
+        self._last_state_dump_ts: int = 0
+        self._state_dump_interval_ns: int = 1_000_000_000  # 1 second
+
+        import os
+        from pathlib import Path
+        state_dir = Path(os.getenv("HL_CATALOG_PATH", "data/catalog")).parent
+        state_dir.mkdir(parents=True, exist_ok=True)
+        self._state_file = str(state_dir / "apex_state.json")
+
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
@@ -245,6 +260,11 @@ class ApexStrategy(Strategy):
             self._maybe_evaluate_signal(book)
             self._last_signal_ts = now
 
+        # Dump state to file at most once per second
+        if (now - self._last_state_dump_ts) >= self._state_dump_interval_ns:
+            self._write_state_file(book)
+            self._last_state_dump_ts = now
+
     def on_trade_tick(self, tick: TradeTick) -> None:
         """Update trade flow features and Hawkes intensity."""
         self._trade_features.update(tick)
@@ -293,6 +313,9 @@ class ApexStrategy(Strategy):
                 f"Order filled: {event.last_qty} @ {event.last_px} "
                 f"| commission: {event.commission}"
             )
+
+        self._trade_count += 1
+        self._total_commission += float(event.commission.as_double()) if hasattr(event.commission, "as_double") else float(str(event.commission).split()[0])
 
         # Update exposure manager with current equity
         account = self.portfolio.account(self._instrument_id.venue)
@@ -370,6 +393,10 @@ class ApexStrategy(Strategy):
         edge = self._edge_model.compute_edge(features)
 
         # Minimum edge threshold check
+        self.log.debug(
+            f"edge={edge:.4f} obi={self._latest_obi:.3f} tfi={self._latest_tfi:.3f} "
+            f"mp_drift={self._latest_mp_drift:.6f} hawkes={hawkes_norm:.3f}"
+        )
         if abs(edge) < self._min_edge:
             return
 
@@ -483,6 +510,14 @@ class ApexStrategy(Strategy):
             )
 
         self._active_order_id = order.client_order_id
+        self._last_edge = edge
+        self._last_order_summary = {
+            "side": order_side.name,
+            "qty": size,
+            "price": decision.price,
+            "edge": round(edge, 4),
+            "regime": self._regime_detector.state.value,
+        }
         self.submit_order(order)
 
         self.log.info(
@@ -490,3 +525,78 @@ class ApexStrategy(Strategy):
             f"{decision.price or 'MARKET'} | edge={edge:.4f} | "
             f"regime={self._regime_detector.state.value}"
         )
+
+    # ------------------------------------------------------------------
+    # State export for live monitoring dashboard
+    # ------------------------------------------------------------------
+
+    def _write_state_file(self, book) -> None:
+        """Write a JSON snapshot of strategy state to disk for the monitor UI."""
+        import json
+        from datetime import datetime, timezone
+
+        # Position info
+        pos_info: dict = {}
+        open_positions = self.cache.positions_open(instrument_id=self._instrument_id)
+        if open_positions:
+            pos = open_positions[0]
+            best_bid = book.best_bid_price()
+            best_ask = book.best_ask_price()
+            mid = 0.0
+            if best_bid and best_ask:
+                mid = (float(best_bid) + float(best_ask)) / 2.0
+            unreal_pnl = float(pos.quantity) * (mid - float(pos.avg_px_open)) * (1 if pos.is_long else -1)
+            pos_info = {
+                "side": pos.entry.name if hasattr(pos.entry, "name") else str(pos.entry),
+                "qty": round(float(pos.quantity), 5),
+                "avg_px": round(float(pos.avg_px_open), 2),
+                "unrealized_pnl": round(unreal_pnl, 4),
+                "realized_pnl": round(float(pos.realized_pnl.as_double()) if hasattr(pos.realized_pnl, "as_double") else 0.0, 4),
+                "duration_s": round((self.clock.timestamp_ns() - pos.ts_opened) / 1e9, 1),
+            }
+
+        # Account balance
+        balance = 0.0
+        account = self.portfolio.account(self._instrument_id.venue)
+        if account:
+            from nautilus_trader.model.currencies import USDC
+            bal = account.balance_total(USDC)
+            if bal is not None:
+                balance = round(float(bal.as_double()), 2)
+
+        # Mid price
+        best_bid = book.best_bid_price()
+        best_ask = book.best_ask_price()
+        mid_px = 0.0
+        if best_bid and best_ask:
+            mid_px = round((float(best_bid) + float(best_ask)) / 2.0, 2)
+
+        state = {
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "instrument": str(self._instrument_id) if self._instrument_id else "",
+            "mid_px": mid_px,
+            "regime": self._regime_detector.state.value,
+            "balance": balance,
+            "position": pos_info,
+            "features": {
+                "obi": round(self._latest_obi, 4),
+                "tfi": round(self._latest_tfi, 4),
+                "mp_drift": round(self._latest_mp_drift, 8),
+                "hawkes": round(self._latest_hawkes, 4),
+                "cascade": round(self._cascade_model.compute_cascade_score(), 4),
+                "funding": round(self._funding_pressure, 4),
+                "spread": round(self._latest_spread, 4),
+                "vol_short": round(self._vol_features.realized_vol_short(), 6),
+            },
+            "last_edge": round(self._last_edge, 4),
+            "last_order": self._last_order_summary,
+            "active_order": str(self._active_order_id) if self._active_order_id else None,
+            "trade_count": self._trade_count,
+            "total_commission": round(self._total_commission, 4),
+        }
+
+        try:
+            with open(self._state_file, "w") as f:
+                json.dump(state, f)
+        except Exception:
+            pass  # Never let monitoring I/O crash the strategy
