@@ -29,7 +29,15 @@ build/
 *.log
 *.csv
 *.sqlite
+*.sqlite-shm
+*.sqlite-wal
 *.db
+
+# Collected market data
+hl_engine/data/
+
+# Cache files
+wallet_cache.json
 
 # OS
 .DS_Store
