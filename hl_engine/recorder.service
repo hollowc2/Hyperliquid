@@ -24,7 +24,7 @@ StartLimitBurst=5
 
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=apex-recorder
+SyslogIdentifier=hl-recorder
 
 [Install]
 WantedBy=multi-user.target
