@@ -1,5 +1,5 @@
 [Unit]
-Description=APEX Algo — Hyperliquid Live Data Recorder
+Description=HL Engine — Hyperliquid Live Data Recorder
 Documentation=https://github.com/hollowc2/HyperLiquid
 After=docker.service network-online.target
 Requires=docker.service
@@ -9,7 +9,7 @@ Type=simple
 User=ubuntu
 
 # --- Update this path to your clone on the VPS ---
-WorkingDirectory=/home/ubuntu/apex_algo
+WorkingDirectory=/home/ubuntu/hl_engine
 
 # Build the image on first start (no-op if already built)
 ExecStartPre=docker compose build --quiet recorder

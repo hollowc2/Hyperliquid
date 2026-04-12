@@ -43,7 +43,7 @@ WS_URL = os.getenv("HL_WS_URL", "wss://api.hyperliquid.xyz/ws")
 
 
 async def main() -> None:
-    from apex_trader.data.live_recorder import HyperliquidRecorder
+    from hl_engine.data.live_recorder import HyperliquidRecorder
 
     CATALOG_PATH.mkdir(parents=True, exist_ok=True)
 

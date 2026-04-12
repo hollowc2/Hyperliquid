@@ -51,7 +51,7 @@ def _date_to_ms(date_str: str) -> int:
 
 
 async def main() -> None:
-    from apex_trader.data.historical_loader import HistoricalDataLoader
+    from hl_engine.data.historical_loader import HistoricalDataLoader
 
     CATALOG_PATH.mkdir(parents=True, exist_ok=True)
 

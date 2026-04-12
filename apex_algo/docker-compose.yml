@@ -1,13 +1,39 @@
 services:
 
-  # ── Live data recorder ──────────────────────────────────────────────
+  # ── TimescaleDB live recorder ───────────────────────────────────────
+  # Streams L2 order book, trade ticks, and 1m bars from Hyperliquid
+  # and writes them directly into the butterfly_timescaledb container.
+  #
+  # Requires in .env:
+  #   TS_DSN=postgresql://hl_user:secret@localhost:5432/market_data
+  #   HL_RECORD_COINS=BTC,ETH,SOL
+  #
+  # Uses host networking so the container can reach 127.0.0.1:5432.
+  # Build: docker compose build ts-recorder
+  # Run:   docker compose up -d ts-recorder
+  ts-recorder:
+    build:
+      context: .
+      target: collector
+    image: apex-collector:latest
+    command: python record_live_ts.py
+    env_file: .env
+    network_mode: host           # reaches butterfly_timescaledb on 127.0.0.1:5432
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  # ── Live data recorder (Parquet catalog) ────────────────────────────
   # Streams L2 order book, trade ticks, and 1m bars from Hyperliquid
   # and writes them to ./data/catalog for backtesting.
   recorder:
     build:
       context: .
       target: runtime
-    image: apex-algo:latest
+    image: hl-engine:latest
     command: python record_live_data.py
     env_file: .env                    # HL_RECORD_COINS, HL_CATALOG_PATH, etc.
     volumes:
@@ -26,7 +52,7 @@ services:
     build:
       context: .
       target: runtime
-    image: apex-algo:latest
+    image: hl-engine:latest
     command: python build_historical_catalog.py
     env_file: .env
     volumes:
@@ -40,8 +66,8 @@ services:
     build:
       context: .
       target: runtime
-    image: apex-algo:latest
-    command: python apex_trader/run_backtest.py
+    image: hl-engine:latest
+    command: python hl_engine/run_backtest.py
     env_file: .env
     volumes:
       - ./data:/app/data
