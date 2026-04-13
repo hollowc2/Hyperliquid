@@ -276,11 +276,10 @@ class ApexStrategy(Strategy):
         self._vol_features.update(bar)
 
         # Price momentum: log return of most recent bar
-        if self._vol_features._last_close and float(bar.open) > 0:
+        o, c = float(bar.open), float(bar.close)
+        if o > 0.0 and c > 0.0:
             import math
-            self._price_momentum = math.log(
-                float(bar.close) / float(bar.open)
-            )
+            self._price_momentum = math.log(c / o)
 
     def on_data(self, data) -> None:
         """Dispatch custom data types to the appropriate model."""

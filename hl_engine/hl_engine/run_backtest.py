@@ -20,6 +20,7 @@ Usage:
 
 import argparse
 import os
+import struct
 from decimal import Decimal
 from pathlib import Path
 
@@ -28,10 +29,10 @@ import pyarrow.parquet as pq
 from nautilus_trader.backtest.engine import BacktestEngine
 from nautilus_trader.config import BacktestEngineConfig
 from nautilus_trader.model.currencies import USDC
-from nautilus_trader.model.data import Bar, BarType, CustomData, DataType, OrderBookDelta, TradeTick
-from nautilus_trader.model.enums import AccountType, BookType, OmsType
-from nautilus_trader.model.identifiers import InstrumentId, Venue
-from nautilus_trader.model.objects import Money
+from nautilus_trader.model.data import Bar, BarSpecification, BarType, CustomData, DataType, OrderBookDelta, TradeTick
+from nautilus_trader.model.enums import AccountType, AggregationSource, BarAggregation, BookType, OmsType, PriceType
+from nautilus_trader.model.identifiers import ClientId, InstrumentId, Venue
+from nautilus_trader.model.objects import Money, Price, Quantity
 from nautilus_trader.persistence.catalog import ParquetDataCatalog
 
 from hl_engine.config.apex_config import ApexConfig, ApexStrategyConfig, HyperliquidConfig
@@ -41,8 +42,8 @@ from hl_engine.strategy.apex_strategy import ApexStrategy
 # --- Configuration ---
 CATALOG_PATH = Path(os.getenv("HL_CATALOG_PATH", "data/catalog"))
 INSTRUMENT_ID = os.getenv("HL_INSTRUMENT_ID", "BTC-USD.HYPERLIQUID")
-START_TIME = os.getenv("HL_START_DATE", "2024-01-01")
-END_TIME = os.getenv("HL_END_DATE", "2024-03-01")
+START_TIME = os.getenv("HL_START_DATE", "2026-04-09")
+END_TIME = os.getenv("HL_END_DATE", "2026-04-13")
 STARTING_BALANCE_USDC = float(os.getenv("HL_STARTING_BALANCE", "100000"))
 
 
@@ -53,6 +54,63 @@ def _catalog_has(catalog: ParquetDataCatalog, data_cls, instrument_id: Instrumen
         return len(data) > 0
     except Exception:
         return False
+
+
+def _bar_parquet_files(catalog_path: Path, instrument_id: str) -> list[Path]:
+    """Return all 1-minute bar Parquet files sorted by filename (chronological)."""
+    bar_dir = catalog_path / "data" / "bar" / f"{instrument_id}-1-MINUTE-LAST-EXTERNAL"
+    if not bar_dir.exists():
+        return []
+    return sorted(bar_dir.glob("*.parquet"))
+
+
+def _load_bars_direct(catalog_path: Path, instrument_id_str: str, start_ns: int, end_ns: int) -> list[Bar]:
+    """
+    Load 1-minute bars directly from Parquet, bypassing the NT catalog query
+    (which fails when bar files have conflicting price_precision metadata from
+    historical loader vs live recorder writing at different inferred precisions).
+    """
+    files = _bar_parquet_files(catalog_path, instrument_id_str)
+    if not files:
+        return []
+
+    instrument_id = InstrumentId.from_str(instrument_id_str)
+    bars: list[Bar] = []
+
+    for f in files:
+        tbl = pq.read_table(f)
+        meta = tbl.schema.metadata or {}
+        pp = int(meta.get(b"price_precision", b"2"))
+        sp = int(meta.get(b"size_precision", b"2"))
+
+        bar_type = BarType(
+            instrument_id=instrument_id,
+            bar_spec=BarSpecification(1, BarAggregation.MINUTE, PriceType.LAST),
+            aggregation_source=AggregationSource.EXTERNAL,
+        )
+
+        rows = tbl.to_pydict()
+        for i in range(tbl.num_rows):
+            ts = rows["ts_event"][i]
+            if ts < start_ns or ts > end_ns:
+                continue
+            try:
+                o = Price.from_raw(struct.unpack_from("<q", rows["open"][i])[0], pp)
+                h = Price.from_raw(struct.unpack_from("<q", rows["high"][i])[0], pp)
+                l = Price.from_raw(struct.unpack_from("<q", rows["low"][i])[0], pp)
+                c = Price.from_raw(struct.unpack_from("<q", rows["close"][i])[0], pp)
+                v = Quantity.from_raw(struct.unpack_from("<Q", rows["volume"][i])[0], sp)
+                bars.append(Bar(
+                    bar_type=bar_type,
+                    open=o, high=h, low=l, close=c, volume=v,
+                    ts_event=ts,
+                    ts_init=rows["ts_init"][i],
+                ))
+            except (ValueError, OverflowError):
+                pass  # skip mid-candle snapshots with invalid OHLC
+
+    bars.sort(key=lambda b: b.ts_event)
+    return bars
 
 
 def _load_custom_data(
@@ -210,20 +268,29 @@ def main() -> None:
         help="Bar aggregation in minutes for the MA strategy (default: 1). "
              "Values > 1 resample 1-min catalog bars.",
     )
+    parser.add_argument(
+        "--with-ob",
+        action="store_true",
+        default=False,
+        help="Load L2 order book data (enables OBI/microprice features but uses significant RAM).",
+    )
     args = parser.parse_args()
 
     catalog = ParquetDataCatalog(str(CATALOG_PATH))
     instrument_id = InstrumentId.from_str(INSTRUMENT_ID)
 
-    has_ob = _catalog_has(catalog, OrderBookDelta, instrument_id)
+    has_ob = args.with_ob and _catalog_has(catalog, OrderBookDelta, instrument_id)
     has_trades = _catalog_has(catalog, TradeTick, instrument_id)
-    has_bars = _catalog_has(catalog, Bar, instrument_id)
+    has_bars = len(_bar_parquet_files(CATALOG_PATH, INSTRUMENT_ID)) > 0
 
     start_ns = _parse_ts(START_TIME)
     end_ns = _parse_ts(END_TIME)
 
-    funding_rows = _load_custom_data(CATALOG_PATH, "funding_rate", INSTRUMENT_ID, start_ns, end_ns)
-    oi_rows = _load_custom_data(CATALOG_PATH, "open_interest", INSTRUMENT_ID, start_ns, end_ns)
+    # Funding and OI are loaded without a lower time bound so that historical
+    # records written by build_historical_catalog.py pre-seed the FundingModel
+    # before the first bar arrives (warmup). Liquidations are backtest-window only.
+    funding_rows = _load_custom_data(CATALOG_PATH, "funding_rate", INSTRUMENT_ID, 0, end_ns)
+    oi_rows = _load_custom_data(CATALOG_PATH, "open_interest", INSTRUMENT_ID, 0, end_ns)
     liq_rows = _load_custom_data(CATALOG_PATH, "liquidations", INSTRUMENT_ID, start_ns, end_ns)
 
     print(f"Catalog data available for {INSTRUMENT_ID}:")
@@ -277,13 +344,8 @@ def main() -> None:
         )
         engine.add_data(trade_data)
 
-    bar_type_1m = BarType.from_str(f"{INSTRUMENT_ID}-1-MINUTE-LAST-EXTERNAL")
-    bar_data_1m = catalog.bars(
-        instrument_ids=[INSTRUMENT_ID],
-        bar_types=[str(bar_type_1m)],
-        start=start_ns,
-        end=end_ns,
-    )
+    bar_data_1m = _load_bars_direct(CATALOG_PATH, INSTRUMENT_ID, start_ns, end_ns)
+    print(f"  Bars (1m)      : {len(bar_data_1m)} bars loaded directly from Parquet")
 
     # For the MA strategy with bar_minutes > 1, resample before adding to engine
     bar_minutes = args.bar_minutes if args.strategy == "ma" else 1
@@ -296,12 +358,14 @@ def main() -> None:
     engine.add_data(bar_data)
 
     # --- Custom data (funding, OI, liquidations) ---
+    # CustomData has no instrument_id visible to NT, so client_id is required.
+    hl_client_id = ClientId("HYPERLIQUID")
     if funding_rows:
-        engine.add_data(_rows_to_funding(funding_rows, instrument_id))
+        engine.add_data(_rows_to_funding(funding_rows, instrument_id), client_id=hl_client_id)
     if oi_rows:
-        engine.add_data(_rows_to_oi(oi_rows, instrument_id))
+        engine.add_data(_rows_to_oi(oi_rows, instrument_id), client_id=hl_client_id)
     if liq_rows:
-        engine.add_data(_rows_to_liquidations(liq_rows, instrument_id))
+        engine.add_data(_rows_to_liquidations(liq_rows, instrument_id), client_id=hl_client_id)
 
     # --- Strategy ---
     if args.strategy == "ma":

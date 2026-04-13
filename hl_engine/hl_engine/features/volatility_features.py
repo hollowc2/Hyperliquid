@@ -27,6 +27,8 @@ class VolatilityFeatures:
     def update(self, bar: Bar) -> None:
         """Append log return from bar close price."""
         close = float(bar.close)
+        if close <= 0.0:
+            return
         if self._last_close is not None and self._last_close > 0.0:
             lr = math.log(close / self._last_close)
             self._log_returns.append(lr)

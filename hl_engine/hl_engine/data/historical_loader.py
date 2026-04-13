@@ -23,6 +23,8 @@ from pathlib import Path
 from typing import Optional
 
 import aiohttp
+import pyarrow as pa
+import pyarrow.parquet as pq
 
 from nautilus_trader.model.data import Bar, BarType
 from nautilus_trader.model.identifiers import InstrumentId, Symbol
@@ -194,10 +196,10 @@ class HistoricalDataLoader:
 
     async def _fetch_funding(self, coin: str, start_ms: int, end_ms: int) -> None:
         """
-        Fetch funding rate history and write to a CSV sidecar at
-        data/catalog/funding/<coin>.csv
-
-        Columns: ts_ms, coin, funding_rate
+        Fetch funding rate history and write to:
+          - CSV sidecar at data/catalog/funding/<coin>.csv
+          - Custom Parquet at data/catalog/custom/funding_rate/<instrument_id>/<ts_start>_<ts_end>.parquet
+            (same format as the live recorder, so the backtest can seed FundingModel warmup)
         """
         payload = {
             "type": "fundingHistory",
@@ -215,11 +217,10 @@ class HistoricalDataLoader:
             log.info(f"  {coin}: no funding history returned.")
             return
 
+        # --- CSV sidecar (legacy) ---
         out_dir = self._catalog_path / "funding"
         out_dir.mkdir(parents=True, exist_ok=True)
         out_path = out_dir / f"{coin}.csv"
-
-        # Append if file exists, write header only when creating
         file_exists = out_path.exists()
         with out_path.open("a", newline="") as f:
             writer = csv.writer(f)
@@ -228,7 +229,45 @@ class HistoricalDataLoader:
             for rec in records:
                 writer.writerow([rec.get("time", 0), coin, rec.get("fundingRate", 0)])
 
-        log.info(f"  {coin}: {len(records)} funding records written to {out_path}.")
+        # --- Custom Parquet (for backtest FundingModel pre-seeding) ---
+        instrument = self._instruments.get(coin)
+        if instrument is not None:
+            instrument_id_str = str(instrument.id)
+            rows = []
+            for rec in records:
+                ts_ns = int(rec.get("time", 0)) * 1_000_000  # ms → ns
+                rows.append({
+                    "instrument_id": instrument_id_str,
+                    "rate": float(rec.get("fundingRate", 0.0)),
+                    "next_funding_time": 0,
+                    "open_interest": 0.0,
+                    "ts_event": ts_ns,
+                    "ts_init": ts_ns,
+                })
+            schema = pa.schema([
+                ("instrument_id", pa.string()),
+                ("rate", pa.float64()),
+                ("next_funding_time", pa.int64()),
+                ("open_interest", pa.float64()),
+                ("ts_event", pa.int64()),
+                ("ts_init", pa.int64()),
+            ])
+            out_pq_dir = self._catalog_path / "custom" / "funding_rate" / instrument_id_str
+            out_pq_dir.mkdir(parents=True, exist_ok=True)
+            ts_start = rows[0]["ts_event"]
+            ts_end = rows[-1]["ts_event"]
+            out_pq = out_pq_dir / f"{ts_start}_{ts_end}.parquet"
+            table = pa.table(
+                {col: [r[col] for r in rows] for col in schema.names},
+                schema=schema,
+            )
+            pq.write_table(table, out_pq)
+            log.info(
+                f"  {coin}: {len(records)} funding records written to {out_path} "
+                f"and {out_pq.name}."
+            )
+        else:
+            log.info(f"  {coin}: {len(records)} funding records written to {out_path}.")
 
 
 # ------------------------------------------------------------------
