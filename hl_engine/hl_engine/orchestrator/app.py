@@ -24,7 +24,11 @@ import time
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import Response
+from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
 from pydantic import BaseModel
+
+from hl_engine.orchestrator import metrics
 
 log = logging.getLogger(__name__)
 
@@ -102,6 +106,7 @@ async def submit_order(req: OrderRequest):
     notional = (req.price or 0.0) * req.quantity
     allowed, reason = await risk_manager.check_order(req.strategy_id, notional, req.is_reduce)
     if not allowed:
+        metrics.orders_rejected.labels(strategy=req.strategy_id, reason="risk").inc()
         raise HTTPException(status_code=422, detail=reason)
 
     # 5. Build HL order params
@@ -143,10 +148,12 @@ async def submit_order(req: OrderRequest):
             result = await order_gateway.submit_order(coin, is_buy, sz, limit_px, order_type_dict)
         except Exception as e:
             rate_limiter.record_hl_rejection(req.strategy_id)
+            metrics.orders_rejected.labels(strategy=req.strategy_id, reason="hl_error").inc()
             raise HTTPException(status_code=502, detail=f"HL submission error: {e}")
 
         if result.get("status") != "ok":
             rate_limiter.record_hl_rejection(req.strategy_id)
+            metrics.orders_rejected.labels(strategy=req.strategy_id, reason="hl_error").inc()
             err = result.get("response", {})
             raise HTTPException(status_code=422, detail=f"HL rejected order: {err}")
 
@@ -164,12 +171,19 @@ async def submit_order(req: OrderRequest):
             raise HTTPException(status_code=502, detail="No oid in HL response")
 
     # 8. Record success
+    submit_ts_ns = time.time_ns()
     rate_limiter.record_hl_success(req.strategy_id)
     persistence.mark_order_submitted(req.client_order_id, oid)
     persistence.save_oid_mapping(oid, req.strategy_id, req.client_order_id)
     if fill_dispatcher is not None:
-        fill_dispatcher.register_oid(oid, req.strategy_id, req.client_order_id, notional)
+        fill_dispatcher.register_oid(oid, req.strategy_id, req.client_order_id, notional, submit_ts_ns)
     await risk_manager.reserve_notional(req.strategy_id, notional)
+
+    metrics.orders_submitted.labels(
+        strategy=req.strategy_id,
+        side=req.side.lower(),
+        order_type=req.order_type.lower(),
+    ).inc()
 
     log.info(f"Order submitted: {req.strategy_id} {req.side} {sz} {coin} oid={oid}")
     return {"status": "submitted", "oid": oid, "client_order_id": req.client_order_id}
@@ -349,3 +363,13 @@ async def health():
         "registered_strategies": list(_registered_strategies.keys()),
         "ts": time.time(),
     }
+
+
+# ---------------------------------------------------------------------------
+# Prometheus metrics
+# ---------------------------------------------------------------------------
+
+@app.get("/metrics", include_in_schema=False)
+async def prometheus_metrics():
+    """Expose Prometheus metrics for scraping."""
+    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)

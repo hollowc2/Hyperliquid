@@ -17,6 +17,8 @@ import time
 import logging
 from typing import Optional
 
+from hl_engine.orchestrator import metrics
+
 log = logging.getLogger(__name__)
 
 _CONSECUTIVE_REJECT_THRESHOLD = 5
@@ -55,7 +57,7 @@ class _CircuitBreaker:
         self._first_reject_ts: Optional[float] = None
         self._open_until: Optional[float] = None
 
-    def is_open(self) -> bool:
+    def is_open(self, strategy_id: str = "") -> bool:
         if self._open_until is None:
             return False
         if time.monotonic() >= self._open_until:
@@ -63,6 +65,8 @@ class _CircuitBreaker:
             self._open_until = None
             self._consecutive_rejects = 0
             self._first_reject_ts = None
+            if strategy_id:
+                metrics.circuit_breaker_open.labels(strategy=strategy_id).set(0)
             return False
         return True
 
@@ -78,6 +82,8 @@ class _CircuitBreaker:
         self._consecutive_rejects += 1
         if self._consecutive_rejects >= _CONSECUTIVE_REJECT_THRESHOLD:
             self._open_until = now + _CIRCUIT_OPEN_DURATION_SECS
+            metrics.circuit_breaker_trips.labels(strategy=strategy_id).inc()
+            metrics.circuit_breaker_open.labels(strategy=strategy_id).set(1)
             log.warning(
                 f"Circuit breaker OPENED for strategy {strategy_id!r} — "
                 f"{self._consecutive_rejects} consecutive HL rejections in {_REJECT_WINDOW_SECS}s. "
@@ -120,12 +126,14 @@ class RateLimiter:
         """
         # Circuit breaker check
         cb = self._circuit_breakers.get(strategy_id)
-        if cb and cb.is_open():
+        if cb and cb.is_open(strategy_id):
+            metrics.orders_rejected.labels(strategy=strategy_id, reason="circuit_breaker").inc()
             return False, f"Circuit breaker open for strategy {strategy_id!r}"
 
         # Per-strategy bucket
         bucket = self._strategy_buckets.get(strategy_id)
         if bucket and not bucket.consume():
+            metrics.orders_rejected.labels(strategy=strategy_id, reason="rate_limit").inc()
             return False, f"Per-strategy rate limit exceeded for {strategy_id!r}"
 
         # Global bucket
@@ -133,6 +141,7 @@ class RateLimiter:
             # Refund the per-strategy token if global fails
             if bucket:
                 bucket._tokens = min(bucket._rate, bucket._tokens + 1.0)
+            metrics.orders_rejected.labels(strategy=strategy_id, reason="rate_limit").inc()
             return False, "Global order rate limit exceeded"
 
         return True, ""

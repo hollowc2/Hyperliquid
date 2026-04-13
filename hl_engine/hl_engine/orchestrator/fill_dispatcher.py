@@ -17,6 +17,7 @@ from websockets.connection import State as WsState
 
 import zmq.asyncio
 
+from hl_engine.orchestrator import metrics
 from hl_engine.adapters.hyperliquid.constants import (
     HL_PING_INTERVAL_SECS,
     HL_WS_URL,
@@ -69,6 +70,8 @@ class FillDispatcher:
         self._oid_to_client_id: dict[int, str] = {}
         # order notional reserved (for release on cancel/rejection)
         self._oid_to_notional: dict[int, float] = {}
+        # oid → submit timestamp ns (for fill latency measurement)
+        self._oid_to_submit_ts_ns: dict[int, int] = {}
 
         self._ws: Optional[websockets.WebSocketClientProtocol] = None
         self._running = False
@@ -83,11 +86,13 @@ class FillDispatcher:
         strategy_id: str,
         client_order_id: str,
         notional: float,
+        submit_ts_ns: int = 0,
     ) -> None:
         """Called by the order endpoint after successful submission."""
         self._oid_to_strategy[oid] = strategy_id
         self._oid_to_client_id[oid] = client_order_id
         self._oid_to_notional[oid] = notional
+        self._oid_to_submit_ts_ns[oid] = submit_ts_ns
 
     async def restore_from_db(self) -> None:
         """Load oid→strategy mapping from SQLite (called on startup before run())."""
@@ -200,6 +205,14 @@ class FillDispatcher:
 
             # Update risk
             await self._risk_manager.record_fill(strategy_id, abs(notional_delta))
+
+            # Prometheus metrics
+            side_label = "buy" if is_buy else "sell"
+            metrics.fills_total.labels(strategy=strategy_id, side=side_label).inc()
+            submit_ts_ns = self._oid_to_submit_ts_ns.get(oid, 0)
+            if submit_ts_ns and ts_event_ns > submit_ts_ns:
+                latency_ms = (ts_event_ns - submit_ts_ns) / 1e6
+                metrics.fill_latency.labels(strategy=strategy_id).observe(latency_ms)
 
             # Publish to strategy
             fill_data = {

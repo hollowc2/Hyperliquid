@@ -1,6 +1,9 @@
 networks:
   hl-net:
     driver: bridge
+  monitoring_net:
+    external: true
+    name: monitoring_net
 
 services:
 
@@ -22,15 +25,16 @@ services:
     command: python -m hl_engine.orchestrator.main
     env_file: .env
     ports:
-      - "8000:8000"    # REST API
-      - "5555:5555"    # ZMQ market data PUB
-      - "5556:5556"    # ZMQ fills PUB
+      - "127.0.0.1:8100:8000"    # REST API (host 8100, 8000 is taken by butterfly)
+      - "5555:5555"               # ZMQ market data PUB
+      - "5556:5556"               # ZMQ fills PUB
     volumes:
       - ./data:/app/data                       # SQLite DB + catalog
       - ./strategies:/app/strategies           # YAML strategy configs
       - /var/run/docker.sock:/var/run/docker.sock  # Docker lifecycle mgmt
     networks:
       - hl-net
+      - monitoring_net
     restart: unless-stopped
     logging:
       driver: "json-file"

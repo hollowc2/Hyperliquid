@@ -15,6 +15,8 @@ import asyncio
 import logging
 from typing import Optional
 
+from hl_engine.orchestrator import metrics
+
 log = logging.getLogger(__name__)
 
 
@@ -30,6 +32,7 @@ class GlobalRiskManager:
         self._strategy_notionals: dict[str, float] = {}
         self._strategy_limits: dict[str, float] = {}   # strategy_id → max_position_usd
         self._lock = asyncio.Lock()
+        metrics.global_ceiling.set(global_ceiling_usd)
 
     # ------------------------------------------------------------------
     # Setup
@@ -56,7 +59,9 @@ class GlobalRiskManager:
             for fill in fills_by_strategy.get(strategy_id, []):
                 notional += float(fill["notional_delta"])
             self._strategy_notionals[strategy_id] = notional
+            metrics.notional_reserved.labels(strategy=strategy_id).set(notional)
             log.info(f"Risk restored: {strategy_id} → notional=${notional:.2f}")
+        self._update_global_gauge()
 
     # ------------------------------------------------------------------
     # Order checks
@@ -102,18 +107,34 @@ class GlobalRiskManager:
             self._strategy_notionals[strategy_id] = (
                 self._strategy_notionals.get(strategy_id, 0.0) + notional
             )
+            self._update_gauges(strategy_id)
 
     async def record_fill(self, strategy_id: str, notional_delta: float) -> None:
         """Update notional after a fill (positive = added, negative = closed)."""
         async with self._lock:
             current = self._strategy_notionals.get(strategy_id, 0.0)
             self._strategy_notionals[strategy_id] = max(0.0, current + notional_delta)
+            self._update_gauges(strategy_id)
 
     async def release_notional(self, strategy_id: str, notional: float) -> None:
         """Release reserved notional on cancel or rejection."""
         async with self._lock:
             current = self._strategy_notionals.get(strategy_id, 0.0)
             self._strategy_notionals[strategy_id] = max(0.0, current - notional)
+            self._update_gauges(strategy_id)
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _update_gauges(self, strategy_id: str) -> None:
+        """Update per-strategy and global Prometheus gauges. Call while holding lock."""
+        n = self._strategy_notionals.get(strategy_id, 0.0)
+        metrics.notional_reserved.labels(strategy=strategy_id).set(n)
+        self._update_global_gauge()
+
+    def _update_global_gauge(self) -> None:
+        metrics.global_notional.set(sum(self._strategy_notionals.values()))
 
     # ------------------------------------------------------------------
     # Reporting
