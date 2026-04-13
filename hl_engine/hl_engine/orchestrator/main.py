@@ -202,7 +202,7 @@ async def main() -> None:
     uvicorn_config = uvicorn.Config(
         app=app_module.app,
         host=bind_host,
-        port=8000,
+        port=int(os.getenv("ORCHESTRATOR_PORT", "8000")),
         log_level="info",
         access_log=False,
     )

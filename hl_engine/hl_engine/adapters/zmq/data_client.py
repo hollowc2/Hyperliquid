@@ -208,7 +208,9 @@ class ZmqLiveDataClient(LiveMarketDataClient):
             if instrument is None:
                 return
             for c in candles:
-                bar = self._parse_candle(c, bar_type, instrument)
+                # Candle time field is in ms; convert to ns for ts_ns
+                ts_ns = int(c.get("t", 0)) * 1_000_000
+                bar = self._parse_candle(c, bar_type, instrument, ts_ns)
                 self._handle_data(bar)
         except Exception as e:
             self._log.warning(f"Failed to request bars for {coin}: {e}")

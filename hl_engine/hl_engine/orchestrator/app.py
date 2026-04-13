@@ -110,9 +110,14 @@ async def submit_order(req: OrderRequest):
 
     if req.order_type.upper() == "MARKET":
         # HL uses IOC limit with slippage buffer for market orders
-        # We don't have the book here, so use a wide buffer (5%)
-        # The strategy should pass a reference price via the price field
         ref_px = req.price or 0.0
+        if ref_px <= 0 and data_feed is not None:
+            # Fall back to orchestrator's live L2 snapshot
+            snap = data_feed.get_snapshot(coin)
+            if snap:
+                levels = snap.get("asks" if is_buy else "bids", [])
+                if levels:
+                    ref_px = float(levels[0][0])
         if ref_px <= 0:
             raise HTTPException(status_code=422, detail="Market orders require a reference price")
         slippage = 0.05
@@ -127,36 +132,43 @@ async def submit_order(req: OrderRequest):
     else:
         raise HTTPException(status_code=422, detail=f"Unsupported order type: {req.order_type}")
 
-    # 6. Submit to Hyperliquid
-    try:
-        result = await order_gateway.submit_order(coin, is_buy, sz, limit_px, order_type_dict)
-    except Exception as e:
-        rate_limiter.record_hl_rejection(req.strategy_id)
-        raise HTTPException(status_code=502, detail=f"HL submission error: {e}")
+    # 6. Submit to Hyperliquid (or mock in paper-trade mode)
+    if order_gateway is None:
+        # Paper-trade / no private key: return a synthetic oid
+        import random
+        oid = random.randint(100_000, 999_999)
+        log.info(f"[PAPER] Mock order accepted: {req.strategy_id} {req.side} {sz} {coin} @ {limit_px} → mock_oid={oid}")
+    else:
+        try:
+            result = await order_gateway.submit_order(coin, is_buy, sz, limit_px, order_type_dict)
+        except Exception as e:
+            rate_limiter.record_hl_rejection(req.strategy_id)
+            raise HTTPException(status_code=502, detail=f"HL submission error: {e}")
 
-    if result.get("status") != "ok":
-        rate_limiter.record_hl_rejection(req.strategy_id)
-        err = result.get("response", {})
-        raise HTTPException(status_code=422, detail=f"HL rejected order: {err}")
+        if result.get("status") != "ok":
+            rate_limiter.record_hl_rejection(req.strategy_id)
+            err = result.get("response", {})
+            raise HTTPException(status_code=422, detail=f"HL rejected order: {err}")
 
-    # 7. Extract oid
-    statuses = result.get("response", {}).get("data", {}).get("statuses", [])
-    oid = None
-    if statuses:
-        first = statuses[0]
-        resting = first.get("resting") or first.get("filled")
-        if resting:
-            oid = int(resting.get("oid", 0))
+        # 7. Extract oid
+        statuses = result.get("response", {}).get("data", {}).get("statuses", [])
+        oid = None
+        if statuses:
+            first = statuses[0]
+            resting = first.get("resting") or first.get("filled")
+            if resting:
+                oid = int(resting.get("oid", 0))
 
-    if oid is None:
-        rate_limiter.record_hl_rejection(req.strategy_id)
-        raise HTTPException(status_code=502, detail="No oid in HL response")
+        if oid is None:
+            rate_limiter.record_hl_rejection(req.strategy_id)
+            raise HTTPException(status_code=502, detail="No oid in HL response")
 
     # 8. Record success
     rate_limiter.record_hl_success(req.strategy_id)
     persistence.mark_order_submitted(req.client_order_id, oid)
     persistence.save_oid_mapping(oid, req.strategy_id, req.client_order_id)
-    fill_dispatcher.register_oid(oid, req.strategy_id, req.client_order_id, notional)
+    if fill_dispatcher is not None:
+        fill_dispatcher.register_oid(oid, req.strategy_id, req.client_order_id, notional)
     await risk_manager.reserve_notional(req.strategy_id, notional)
 
     log.info(f"Order submitted: {req.strategy_id} {req.side} {sz} {coin} oid={oid}")
@@ -168,6 +180,9 @@ async def cancel_order(oid: int, strategy_id: str = "", instrument_id: str = "")
     coin = instrument_id.split("-")[0] if instrument_id else ""
     if not coin:
         raise HTTPException(status_code=422, detail="instrument_id required for cancel")
+    if order_gateway is None:
+        log.info(f"[PAPER] Mock cancel: oid={oid} {strategy_id}")
+        return {"status": "cancelled", "oid": oid}
     try:
         result = await order_gateway.cancel_order(coin, oid)
     except Exception as e:
@@ -255,12 +270,17 @@ async def register_strategy(strategy_id: str, req: RegisterRequest):
 async def reconcile(strategy_id: str):
     """Return open orders + account state for a strategy (for NT reconciliation)."""
     try:
-        open_orders = await order_gateway.get_open_orders()
-        account_state = await order_gateway.get_account_state()
+        if order_gateway is not None:
+            open_orders = await order_gateway.get_open_orders()
+            account_state = await order_gateway.get_account_state()
+        else:
+            open_orders = []
+            account_state = {}
+
         # Filter orders that belong to this strategy
         oid_to_client = fill_dispatcher._oid_to_client_id if fill_dispatcher else {}
         strategy_oids = {
-            oid for oid, sid in (fill_dispatcher._oid_to_strategy.items() if fill_dispatcher else {})
+            oid for oid, sid in (fill_dispatcher._oid_to_strategy.items() if fill_dispatcher else {}).items()
             if sid == strategy_id
         }
         strategy_orders = [o for o in open_orders if int(o.get("oid", -1)) in strategy_oids]
