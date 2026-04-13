@@ -1,0 +1,13 @@
+id: apex-btc
+class: hl_engine.strategy.apex_strategy.ApexStrategy
+config_class: hl_engine.config.apex_config.ApexStrategyConfig
+instrument_id: BTC-USD.HYPERLIQUID
+parameters: {}
+risk:
+  max_position_usd: 10000
+  max_leverage: 5.0
+rate_limit:
+  max_orders_per_second: 3
+docker:
+  image: hl-engine:latest
+  container_name: strategy-apex-btc

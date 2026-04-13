@@ -1,4 +1,42 @@
+networks:
+  hl-net:
+    driver: bridge
+
 services:
+
+  # ── Orchestrator ────────────────────────────────────────────────────
+  # Central hub: market data feed (ZMQ PUB 5555), fill dispatcher
+  # (ZMQ PUB 5556), REST API (8000), risk manager, and Docker lifecycle.
+  #
+  # Required in .env:
+  #   HL_WALLET_ADDRESS, HL_PRIVATE_KEY
+  #   GLOBAL_NOTIONAL_CEILING_USD=50000
+  #   GLOBAL_MAX_OPS=10
+  #   STRATEGIES_DIR=/app/strategies
+  #   DB_PATH=/app/data/orchestrator.db
+  orchestrator:
+    build:
+      context: .
+      target: runtime
+    image: hl-engine:latest
+    command: python -m hl_engine.orchestrator.main
+    env_file: .env
+    ports:
+      - "8000:8000"    # REST API
+      - "5555:5555"    # ZMQ market data PUB
+      - "5556:5556"    # ZMQ fills PUB
+    volumes:
+      - ./data:/app/data                       # SQLite DB + catalog
+      - ./strategies:/app/strategies           # YAML strategy configs
+      - /var/run/docker.sock:/var/run/docker.sock  # Docker lifecycle mgmt
+    networks:
+      - hl-net
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
 
   # ── TimescaleDB live recorder ───────────────────────────────────────
   # Streams L2 order book, trade ticks, and 1m bars from Hyperliquid

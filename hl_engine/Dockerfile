@@ -77,6 +77,7 @@ COPY --from=builder /app/hl_engine ./hl_engine/
 COPY --from=builder /app/record_live_data.py \
                     /app/build_historical_catalog.py \
                     /app/record_live_ts.py ./
+COPY strategies/ ./strategies/
 
 # Put the venv on PATH
 ENV PATH="/app/.venv/bin:$PATH" \
@@ -85,6 +86,8 @@ ENV PATH="/app/.venv/bin:$PATH" \
 
 # Catalog data lives here — mount a host volume so it persists
 VOLUME ["/app/data"]
+
+EXPOSE 8000 5555 5556
 
 # Default: run the live recorder.
 # Override CMD in docker-compose.yml or with `docker run` to run the

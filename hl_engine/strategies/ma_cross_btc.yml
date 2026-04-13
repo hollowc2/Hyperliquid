@@ -1,0 +1,16 @@
+id: ma-cross-btc
+class: hl_engine.strategy.ma_strategy.MaCrossStrategy
+config_class: hl_engine.config.ma_config.MaCrossConfig
+instrument_id: BTC-USD.HYPERLIQUID
+parameters:
+  fast_period: 10
+  slow_period: 30
+  bar_minutes: 1
+risk:
+  max_position_usd: 1000
+  max_leverage: 2.0
+rate_limit:
+  max_orders_per_second: 2
+docker:
+  image: hl-engine:latest
+  container_name: strategy-ma-cross-btc

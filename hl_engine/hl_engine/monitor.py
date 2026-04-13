@@ -8,6 +8,10 @@ Usage (from hl_engine/ directory):
     uv run python hl_engine/monitor.py
     uv run python hl_engine/monitor.py --state data/apex_state.json
     uv run python hl_engine/monitor.py --refresh 0.5
+
+Multi-strategy mode (reads from orchestrator REST API):
+    uv run python hl_engine/monitor.py --multi
+    uv run python hl_engine/monitor.py --multi --url http://localhost:8000
 """
 
 import argparse
@@ -17,6 +21,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+import httpx
 from rich.columns import Columns
 from rich.console import Console
 from rich.layout import Layout
@@ -199,6 +204,119 @@ def load_state(path: str) -> tuple[dict, str | None]:
         return {}, f"Read error: {e}"
 
 
+# ── Multi-strategy dashboard ──────────────────────────────────────────────────
+
+def _fetch_multi_state(base_url: str) -> tuple[list, dict, str | None]:
+    """Fetch strategy list and risk summary from orchestrator."""
+    try:
+        with httpx.Client(base_url=base_url, timeout=5.0) as client:
+            strategies_resp = client.get("/strategies")
+            strategies_resp.raise_for_status()
+            risk_resp = client.get("/risk")
+            risk_resp.raise_for_status()
+            return strategies_resp.json(), risk_resp.json(), None
+    except httpx.ConnectError:
+        return [], {}, f"Cannot connect to orchestrator at {base_url}"
+    except Exception as e:
+        return [], {}, str(e)
+
+
+def build_multi_dashboard(strategies: list, risk: dict, base_url: str, err: str | None) -> Layout:
+    layout = Layout()
+    layout.split_column(
+        Layout(name="header", size=3),
+        Layout(name="body"),
+        Layout(name="footer", size=5),
+    )
+
+    # ── Header ────────────────────────────────────────────────────────
+    now = datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
+    if err:
+        header_text = Text(f"  Multi-Strategy Monitor  |  {err}", style="bold red on dark_red")
+    else:
+        global_notional = risk.get("global_notional_usd", 0.0)
+        global_ceiling = risk.get("global_ceiling_usd", 0.0)
+        util = (global_notional / global_ceiling * 100) if global_ceiling else 0.0
+        util_color = "green" if util < 70 else "yellow" if util < 90 else "red"
+        header_text = Text()
+        header_text.append("  Multi-Strategy Monitor  ", style="bold white on navy_blue")
+        header_text.append(f"  {base_url}  ", style="dim")
+        header_text.append(f"  Global: ${global_notional:,.0f} / ${global_ceiling:,.0f}  ", style="white")
+        header_text.append(f"({util:.1f}% utilized)  ", style=f"bold {util_color}")
+        header_text.append(f"  {now}  ", style="dim")
+    layout["header"].update(Panel(header_text, border_style="bright_blue"))
+
+    # ── Body: strategy table ──────────────────────────────────────────
+    strat_table = Table(show_lines=True, expand=True)
+    strat_table.add_column("ID", style="bold cyan", no_wrap=True)
+    strat_table.add_column("Container", style="dim")
+    strat_table.add_column("Status", justify="center")
+    strat_table.add_column("Instance", style="dim", justify="center")
+    strat_table.add_column("Notional USD", justify="right")
+    strat_table.add_column("Max USD", justify="right", style="dim")
+    strat_table.add_column("Utilization", justify="right")
+    strat_table.add_column("Circuit Breaker", justify="center")
+    strat_table.add_column("Registered At", style="dim")
+
+    per_strategy_risk = risk.get("strategies", {})
+
+    for s in strategies:
+        sid = s.get("id", "?")
+        container = s.get("container_name", "?")
+        raw_status = s.get("status", "unknown")
+        instance = (s.get("instance_id") or "")[:8] or "—"
+        registered_at = s.get("registered_at") or "—"
+
+        if raw_status == "running":
+            status_text = Text("● running", style="green")
+        elif raw_status == "stopped":
+            status_text = Text("○ stopped", style="yellow")
+        elif raw_status == "not_started":
+            status_text = Text("— not started", style="dim")
+        else:
+            status_text = Text(f"? {raw_status}", style="red")
+
+        sr = per_strategy_risk.get(sid, {})
+        notional = sr.get("notional_usd", 0.0)
+        max_usd = sr.get("max_position_usd", 0.0)
+        util = (notional / max_usd * 100) if max_usd else 0.0
+        util_color = "green" if util < 70 else "yellow" if util < 90 else "red"
+        cb_open = sr.get("circuit_breaker_open", False)
+        cb_text = Text("OPEN", style="bold red") if cb_open else Text("closed", style="dim green")
+
+        strat_table.add_row(
+            sid,
+            container,
+            status_text,
+            instance,
+            f"${notional:,.2f}",
+            f"${max_usd:,.2f}" if max_usd else "—",
+            f"[{util_color}]{util:.1f}%[/{util_color}]" if max_usd else "—",
+            cb_text,
+            registered_at,
+        )
+
+    if not strategies:
+        strat_table.add_row("[dim]No strategies registered[/dim]", *[""] * 8)
+
+    layout["body"].update(Panel(strat_table, title="Strategies", border_style="bright_blue"))
+
+    # ── Footer: help text ─────────────────────────────────────────────
+    help_text = Text()
+    help_text.append("  Commands: ", style="dim")
+    help_text.append("hl start <id>", style="cyan")
+    help_text.append("  ", style="")
+    help_text.append("hl stop <id>", style="cyan")
+    help_text.append("  ", style="")
+    help_text.append("hl logs <id>", style="cyan")
+    help_text.append("  ", style="")
+    help_text.append("hl risk", style="cyan")
+    help_text.append("    Press [Ctrl+C] to exit", style="dim")
+    layout["footer"].update(Panel(help_text, title="Controls", border_style="dim"))
+
+    return layout
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="APEX Strategy Live Monitor")
     parser.add_argument(
@@ -212,17 +330,35 @@ def main() -> None:
         default=DEFAULT_REFRESH_HZ,
         help=f"Refresh rate in Hz (default: {DEFAULT_REFRESH_HZ})",
     )
+    parser.add_argument(
+        "--multi",
+        action="store_true",
+        help="Multi-strategy mode: read from orchestrator REST API",
+    )
+    parser.add_argument(
+        "--url",
+        default=os.getenv("ORCHESTRATOR_REST_URL", "http://localhost:8000"),
+        help="Orchestrator REST URL for --multi mode (default: http://localhost:8000)",
+    )
     args = parser.parse_args()
 
     console = Console()
     refresh_interval = 1.0 / max(0.1, args.refresh)
 
-    with Live(console=console, refresh_per_second=args.refresh, screen=True) as live:
-        while True:
-            state, err = load_state(args.state)
-            layout = build_dashboard(state, args.state, err)
-            live.update(layout)
-            time.sleep(refresh_interval)
+    if args.multi:
+        with Live(console=console, refresh_per_second=args.refresh, screen=True) as live:
+            while True:
+                strategies, risk_data, err = _fetch_multi_state(args.url)
+                layout = build_multi_dashboard(strategies, risk_data, args.url, err)
+                live.update(layout)
+                time.sleep(refresh_interval)
+    else:
+        with Live(console=console, refresh_per_second=args.refresh, screen=True) as live:
+            while True:
+                state, err = load_state(args.state)
+                layout = build_dashboard(state, args.state, err)
+                live.update(layout)
+                time.sleep(refresh_interval)
 
 
 if __name__ == "__main__":
