@@ -5,15 +5,20 @@ Connects to the Hyperliquid WebSocket and records:
   - L2 order book snapshots → OrderBookDelta
   - Trade ticks            → TradeTick
   - 1-minute candles       → Bar
+  - Funding rate + OI      → FundingRateData / OpenInterestData  (via activeAssetCtx)
+  - Liquidations           → LiquidationData  (via webData2, requires wallet_address)
 
 Data is buffered in memory and flushed to a NautilusTrader
 ParquetDataCatalog at a configurable interval (default 60s).
+Custom types (funding/OI/liquidations) are written to
+  data/catalog/custom/{type}/{instrument_id}/{ts_start}_{ts_end}.parquet
 Runs independently of the NautilusTrader trading engine.
 
 Usage:
     recorder = HyperliquidRecorder(
         coins=["BTC", "ETH"],
         catalog_path="data/catalog",
+        wallet_address="0xYourAddress",   # optional, enables liquidation recording
     )
     asyncio.run(recorder.run())
 """
@@ -27,6 +32,8 @@ from pathlib import Path
 from typing import Optional
 
 import aiohttp
+import pyarrow as pa
+import pyarrow.parquet as pq
 import websockets
 from websockets.connection import State as WsState
 
@@ -60,7 +67,40 @@ from hl_engine.adapters.hyperliquid.constants import (
     WS_TYPE_L2_BOOK,
     WS_TYPE_TRADES,
     WS_TYPE_CANDLE,
+    WS_TYPE_ACTIVE_ASSET_CTX,
+    WS_TYPE_WEB_DATA2,
 )
+
+# ---------------------------------------------------------------------------
+# Pyarrow schemas for custom data types
+# ---------------------------------------------------------------------------
+
+_FUNDING_SCHEMA = pa.schema([
+    ("instrument_id", pa.string()),
+    ("rate", pa.float64()),
+    ("next_funding_time", pa.int64()),
+    ("open_interest", pa.float64()),
+    ("ts_event", pa.int64()),
+    ("ts_init", pa.int64()),
+])
+
+_OI_SCHEMA = pa.schema([
+    ("instrument_id", pa.string()),
+    ("open_interest", pa.float64()),
+    ("open_interest_usd", pa.float64()),
+    ("ts_event", pa.int64()),
+    ("ts_init", pa.int64()),
+])
+
+_LIQ_SCHEMA = pa.schema([
+    ("instrument_id", pa.string()),
+    ("side", pa.string()),
+    ("quantity", pa.float64()),
+    ("price", pa.float64()),
+    ("usd_value", pa.float64()),
+    ("ts_event", pa.int64()),
+    ("ts_init", pa.int64()),
+])
 
 log = logging.getLogger(__name__)
 
@@ -90,20 +130,28 @@ class HyperliquidRecorder:
         flush_interval: int = 60,
         ws_url: str = HL_WS_URL,
         info_url: str = HL_BASE_URL + HL_INFO_ENDPOINT,
+        wallet_address: Optional[str] = None,
     ) -> None:
         self._coins = coins
         self._catalog = ParquetDataCatalog(str(catalog_path))
+        self._catalog_path = Path(catalog_path)
         self._flush_interval = flush_interval
         self._ws_url = ws_url
         self._info_url = info_url
+        self._wallet_address = wallet_address
 
         # coin → CryptoPerpetual
         self._instruments: dict[str, CryptoPerpetual] = {}
 
-        # Data buffers
+        # Standard NT data buffers
         self._ob_deltas: list[OrderBookDelta] = []
         self._trade_ticks: list[TradeTick] = []
         self._bars: list[Bar] = []
+
+        # Custom data buffers (list of row dicts, flushed to Parquet)
+        self._funding_rows: list[dict] = []
+        self._oi_rows: list[dict] = []
+        self._liq_rows: list[dict] = []
 
         self._book_initialized: set[str] = set()
         self._ws: Optional[websockets.WebSocketClientProtocol] = None
@@ -199,12 +247,21 @@ class HyperliquidRecorder:
                 (WS_TYPE_L2_BOOK, {}),
                 (WS_TYPE_TRADES, {}),
                 (WS_TYPE_CANDLE, {"interval": "1m"}),
+                (WS_TYPE_ACTIVE_ASSET_CTX, {}),
             ]:
                 msg = {
                     "method": "subscribe",
                     "subscription": {"type": sub_type, "coin": coin, **extra},
                 }
                 await ws.send(json.dumps(msg))
+
+        if self._wallet_address:
+            await ws.send(json.dumps({
+                "method": "subscribe",
+                "subscription": {"type": WS_TYPE_WEB_DATA2, "user": self._wallet_address},
+            }))
+            log.info(f"Subscribed to webData2 (liquidations) for wallet {self._wallet_address[:8]}…")
+
         log.info(f"Subscribed to {list(self._instruments.keys())}")
 
     async def _ping_loop(self) -> None:
@@ -228,6 +285,10 @@ class HyperliquidRecorder:
             self._handle_trades(msg)
         elif channel == WS_TYPE_CANDLE:
             self._handle_candle(msg)
+        elif channel == WS_TYPE_ACTIVE_ASSET_CTX:
+            self._handle_asset_ctx(msg)
+        elif channel == WS_TYPE_WEB_DATA2:
+            self._handle_web_data2(msg)
 
     # ------------------------------------------------------------------
     # L2 order book
@@ -352,6 +413,67 @@ class HyperliquidRecorder:
         self._bars.append(bar)
 
     # ------------------------------------------------------------------
+    # Funding rate + open interest  (activeAssetCtx)
+    # ------------------------------------------------------------------
+
+    def _handle_asset_ctx(self, msg: dict) -> None:
+        data = msg.get("data", {})
+        coin = data.get("coin", "")
+        instrument = self._instruments.get(coin)
+        if instrument is None:
+            return
+
+        ctx = data.get("ctx", {})
+        instrument_id_str = str(instrument.id)
+        ts = time.time_ns()
+        oi = float(ctx.get("openInterest", 0.0))
+        mark_px = float(ctx.get("markPx", 0.0))
+
+        self._funding_rows.append({
+            "instrument_id": instrument_id_str,
+            "rate": float(ctx.get("funding", 0.0)),
+            "next_funding_time": int(ctx.get("nextFundingTime", 0)) * 1_000_000,
+            "open_interest": oi,
+            "ts_event": ts,
+            "ts_init": ts,
+        })
+        self._oi_rows.append({
+            "instrument_id": instrument_id_str,
+            "open_interest": oi,
+            "open_interest_usd": oi * mark_px,
+            "ts_event": ts,
+            "ts_init": ts,
+        })
+
+    # ------------------------------------------------------------------
+    # Liquidations  (webData2)
+    # ------------------------------------------------------------------
+
+    def _handle_web_data2(self, msg: dict) -> None:
+        data = msg.get("data", {})
+        for liq in data.get("liquidations", []):
+            coin = liq.get("coin", "")
+            instrument = self._instruments.get(coin)
+            if instrument is None:
+                continue
+
+            side_raw = liq.get("side", "")
+            side = "LONG" if side_raw in ("B", "buy", "LONG") else "SHORT"
+            qty = float(liq.get("sz", 0.0))
+            px = float(liq.get("px", 0.0))
+            ts = time.time_ns()
+
+            self._liq_rows.append({
+                "instrument_id": str(instrument.id),
+                "side": side,
+                "quantity": qty,
+                "price": px,
+                "usd_value": qty * px,
+                "ts_event": ts,
+                "ts_init": ts,
+            })
+
+    # ------------------------------------------------------------------
     # Catalog flush
     # ------------------------------------------------------------------
 
@@ -378,8 +500,44 @@ class HyperliquidRecorder:
             counts["Bar"] = len(self._bars)
             self._bars.clear()
 
+        if self._funding_rows:
+            self._flush_custom_rows(self._funding_rows, "funding_rate", _FUNDING_SCHEMA)
+            counts["FundingRateData"] = len(self._funding_rows)
+            self._funding_rows.clear()
+
+        if self._oi_rows:
+            self._flush_custom_rows(self._oi_rows, "open_interest", _OI_SCHEMA)
+            counts["OpenInterestData"] = len(self._oi_rows)
+            self._oi_rows.clear()
+
+        if self._liq_rows:
+            self._flush_custom_rows(self._liq_rows, "liquidations", _LIQ_SCHEMA)
+            counts["LiquidationData"] = len(self._liq_rows)
+            self._liq_rows.clear()
+
         if counts:
             log.info(f"Flushed to catalog: {counts}")
+
+    def _flush_custom_rows(self, rows: list[dict], type_name: str, schema: pa.Schema) -> None:
+        """Write a batch of custom data rows to per-instrument Parquet files."""
+        # Group by instrument_id
+        by_instrument: dict[str, list[dict]] = {}
+        for row in rows:
+            iid = row["instrument_id"]
+            by_instrument.setdefault(iid, []).append(row)
+
+        for instrument_id, iid_rows in by_instrument.items():
+            ts_start = iid_rows[0]["ts_event"]
+            ts_end = iid_rows[-1]["ts_event"]
+            out_dir = self._catalog_path / "custom" / type_name / instrument_id
+            out_dir.mkdir(parents=True, exist_ok=True)
+            out_file = out_dir / f"{ts_start}_{ts_end}.parquet"
+
+            table = pa.table(
+                {col: [r[col] for r in iid_rows] for col in schema.names},
+                schema=schema,
+            )
+            pq.write_table(table, out_file)
 
 
 # ------------------------------------------------------------------

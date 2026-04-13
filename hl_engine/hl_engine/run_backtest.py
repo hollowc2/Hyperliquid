@@ -23,16 +23,19 @@ import os
 from decimal import Decimal
 from pathlib import Path
 
+import pyarrow.parquet as pq
+
 from nautilus_trader.backtest.engine import BacktestEngine
 from nautilus_trader.config import BacktestEngineConfig
 from nautilus_trader.model.currencies import USDC
-from nautilus_trader.model.data import Bar, BarType, OrderBookDelta, TradeTick
+from nautilus_trader.model.data import Bar, BarType, CustomData, DataType, OrderBookDelta, TradeTick
 from nautilus_trader.model.enums import AccountType, BookType, OmsType
 from nautilus_trader.model.identifiers import InstrumentId, Venue
 from nautilus_trader.model.objects import Money
 from nautilus_trader.persistence.catalog import ParquetDataCatalog
 
 from hl_engine.config.apex_config import ApexConfig, ApexStrategyConfig, HyperliquidConfig
+from hl_engine.data.types import FundingRateData, LiquidationData, OpenInterestData
 from hl_engine.strategy.apex_strategy import ApexStrategy
 
 # --- Configuration ---
@@ -50,6 +53,85 @@ def _catalog_has(catalog: ParquetDataCatalog, data_cls, instrument_id: Instrumen
         return len(data) > 0
     except Exception:
         return False
+
+
+def _load_custom_data(
+    catalog_path: Path,
+    type_name: str,
+    instrument_id: str,
+    start_ns: int,
+    end_ns: int,
+) -> list[dict]:
+    """
+    Load custom Parquet rows (funding_rate / open_interest / liquidations)
+    for a given instrument and time range. Returns dicts sorted by ts_event.
+    """
+    base = catalog_path / "custom" / type_name / instrument_id
+    if not base.exists():
+        return []
+    files = sorted(base.glob("*.parquet"))
+    if not files:
+        return []
+
+    rows: list[dict] = []
+    for f in files:
+        table = pq.read_table(f)
+        for batch in table.to_batches():
+            for i in range(batch.num_rows):
+                row = {col: batch.column(col)[i].as_py() for col in table.schema.names}
+                if start_ns <= row["ts_event"] <= end_ns:
+                    rows.append(row)
+
+    rows.sort(key=lambda r: r["ts_event"])
+    return rows
+
+
+def _rows_to_funding(rows: list[dict], instrument_id: InstrumentId) -> list[CustomData]:
+    data_type = DataType(FundingRateData, metadata={"instrument_id": instrument_id})
+    out = []
+    for r in rows:
+        obj = FundingRateData(
+            instrument_id=instrument_id,
+            rate=r["rate"],
+            next_funding_time=r["next_funding_time"],
+            open_interest=r["open_interest"],
+            ts_event=r["ts_event"],
+            ts_init=r["ts_init"],
+        )
+        out.append(CustomData(data_type, obj))
+    return out
+
+
+def _rows_to_oi(rows: list[dict], instrument_id: InstrumentId) -> list[CustomData]:
+    data_type = DataType(OpenInterestData, metadata={"instrument_id": instrument_id})
+    out = []
+    for r in rows:
+        obj = OpenInterestData(
+            instrument_id=instrument_id,
+            open_interest=r["open_interest"],
+            open_interest_usd=r["open_interest_usd"],
+            ts_event=r["ts_event"],
+            ts_init=r["ts_init"],
+        )
+        out.append(CustomData(data_type, obj))
+    return out
+
+
+def _rows_to_liquidations(rows: list[dict], instrument_id: InstrumentId) -> list[CustomData]:
+    data_type = DataType(LiquidationData, metadata={"instrument_id": instrument_id})
+    out = []
+    for r in rows:
+        obj = LiquidationData(
+            instrument_id=instrument_id,
+            side=r["side"],
+            quantity=r["quantity"],
+            price=r["price"],
+            usd_value=r["usd_value"],
+            ts_event=r["ts_event"],
+            ts_init=r["ts_init"],
+        )
+        out.append(CustomData(data_type, obj))
+    return out
 
 
 def _parse_ts(ts: str) -> int:
@@ -137,10 +219,20 @@ def main() -> None:
     has_trades = _catalog_has(catalog, TradeTick, instrument_id)
     has_bars = _catalog_has(catalog, Bar, instrument_id)
 
+    start_ns = _parse_ts(START_TIME)
+    end_ns = _parse_ts(END_TIME)
+
+    funding_rows = _load_custom_data(CATALOG_PATH, "funding_rate", INSTRUMENT_ID, start_ns, end_ns)
+    oi_rows = _load_custom_data(CATALOG_PATH, "open_interest", INSTRUMENT_ID, start_ns, end_ns)
+    liq_rows = _load_custom_data(CATALOG_PATH, "liquidations", INSTRUMENT_ID, start_ns, end_ns)
+
     print(f"Catalog data available for {INSTRUMENT_ID}:")
     print(f"  OrderBookDelta : {'YES' if has_ob else 'NO  (OBI/microprice features will be 0)'}")
     print(f"  TradeTick      : {'YES' if has_trades else 'NO  (TFI/Hawkes features will be 0)'}")
     print(f"  Bar            : {'YES' if has_bars else 'NO  (WARNING: bars required for regime/volatility)'}")
+    print(f"  FundingRateData: {'YES (' + str(len(funding_rows)) + ' events)' if funding_rows else 'NO  (funding_pressure feature will be 0)'}")
+    print(f"  OpenInterestData:{' YES (' + str(len(oi_rows)) + ' events)' if oi_rows else ' NO  (OI growth signal will be 0)'}")
+    print(f"  LiquidationData: {'YES (' + str(len(liq_rows)) + ' events)' if liq_rows else 'NO  (cascade_score=0, cascade mode never triggers)'}")
 
     if not has_bars:
         print(
@@ -169,9 +261,6 @@ def main() -> None:
         engine.add_instrument(inst)
 
     # --- Data ---
-    start_ns = _parse_ts(START_TIME)
-    end_ns = _parse_ts(END_TIME)
-
     if has_ob:
         ob_data = catalog.order_book_deltas(
             instrument_ids=[INSTRUMENT_ID],
@@ -205,6 +294,14 @@ def main() -> None:
     else:
         bar_data = bar_data_1m
     engine.add_data(bar_data)
+
+    # --- Custom data (funding, OI, liquidations) ---
+    if funding_rows:
+        engine.add_data(_rows_to_funding(funding_rows, instrument_id))
+    if oi_rows:
+        engine.add_data(_rows_to_oi(oi_rows, instrument_id))
+    if liq_rows:
+        engine.add_data(_rows_to_liquidations(liq_rows, instrument_id))
 
     # --- Strategy ---
     if args.strategy == "ma":

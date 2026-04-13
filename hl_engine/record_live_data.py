@@ -40,6 +40,7 @@ COINS = [c.strip() for c in os.getenv("HL_RECORD_COINS", "BTC,ETH,SOL").split(",
 CATALOG_PATH = Path(os.getenv("HL_CATALOG_PATH", "data/catalog"))
 FLUSH_INTERVAL = int(os.getenv("HL_FLUSH_INTERVAL", "60"))
 WS_URL = os.getenv("HL_WS_URL", "wss://api.hyperliquid.xyz/ws")
+WALLET_ADDRESS = os.getenv("HL_WALLET_ADDRESS")  # enables liquidation recording if set
 
 
 async def main() -> None:
@@ -47,13 +48,17 @@ async def main() -> None:
 
     CATALOG_PATH.mkdir(parents=True, exist_ok=True)
 
-    log.info(f"Starting recorder | coins={COINS} | catalog={CATALOG_PATH} | flush={FLUSH_INTERVAL}s")
+    log.info(
+        f"Starting recorder | coins={COINS} | catalog={CATALOG_PATH} | flush={FLUSH_INTERVAL}s"
+        + (f" | liquidations=ON (wallet {WALLET_ADDRESS[:8]}…)" if WALLET_ADDRESS else " | liquidations=OFF (set HL_WALLET_ADDRESS to enable)")
+    )
 
     recorder = HyperliquidRecorder(
         coins=COINS,
         catalog_path=CATALOG_PATH,
         flush_interval=FLUSH_INTERVAL,
         ws_url=WS_URL,
+        wallet_address=WALLET_ADDRESS,
     )
 
     loop = asyncio.get_running_loop()
