@@ -81,7 +81,9 @@ def build_dashboard(state: dict, state_file: str, err: str | None) -> Layout:
         header_text.append(f"  ${mid:,.2f}  ", style="bold white")
         header_text.append(f"  Regime: ", style="white")
         header_text.append(f"{regime}  ", style=f"bold {regime_color}")
-        header_text.append(f"  Updated: {ts_age}  ", style="dim")
+        header_text.append("  Updated: ", style="dim")
+        header_text.append_text(Text.from_markup(ts_age))
+        header_text.append("  ", style="dim")
     layout["header"].update(Panel(header_text, border_style="bright_blue"))
 
     # ── Left column: Position + Account ──────────────────────────────
@@ -347,18 +349,24 @@ def main() -> None:
 
     if args.multi:
         with Live(console=console, refresh_per_second=args.refresh, screen=True) as live:
-            while True:
-                strategies, risk_data, err = _fetch_multi_state(args.url)
-                layout = build_multi_dashboard(strategies, risk_data, args.url, err)
-                live.update(layout)
-                time.sleep(refresh_interval)
+            try:
+                while True:
+                    strategies, risk_data, err = _fetch_multi_state(args.url)
+                    layout = build_multi_dashboard(strategies, risk_data, args.url, err)
+                    live.update(layout)
+                    time.sleep(refresh_interval)
+            except KeyboardInterrupt:
+                pass
     else:
         with Live(console=console, refresh_per_second=args.refresh, screen=True) as live:
-            while True:
-                state, err = load_state(args.state)
-                layout = build_dashboard(state, args.state, err)
-                live.update(layout)
-                time.sleep(refresh_interval)
+            try:
+                while True:
+                    state, err = load_state(args.state)
+                    layout = build_dashboard(state, args.state, err)
+                    live.update(layout)
+                    time.sleep(refresh_interval)
+            except KeyboardInterrupt:
+                pass
 
 
 if __name__ == "__main__":

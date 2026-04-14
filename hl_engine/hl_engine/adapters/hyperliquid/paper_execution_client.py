@@ -59,6 +59,12 @@ class HyperliquidPaperExecClient(LiveExecutionClient):
         )
         self._set_account_id(account_id)
         self._paper_balance = paper_balance_usdc
+        self._paper_initial_balance = paper_balance_usdc
+        # Running position state for realized PnL calculation
+        self._paper_pos_qty: float = 0.0   # positive = long, negative = short
+        self._paper_pos_avg_px: float = 0.0
+        self._paper_realized_pnl: float = 0.0
+        self._paper_cumulative_fees: float = 0.0
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -127,6 +133,12 @@ class HyperliquidPaperExecClient(LiveExecutionClient):
             ts_event=self._clock.timestamp_ns(),
         )
 
+        # Update running balance: track realized PnL + fees
+        self._paper_cumulative_fees += fee
+        self._paper_realized_pnl += self._compute_paper_realized_pnl(is_buy, fill_qty, fill_px)
+        self._paper_balance = self._paper_initial_balance + self._paper_realized_pnl - self._paper_cumulative_fees
+        self._generate_paper_account_state()
+
     async def _cancel_order(self, command: CancelOrder) -> None:
         order = self._cache.order(command.client_order_id)
         if order is None:
@@ -164,6 +176,39 @@ class HyperliquidPaperExecClient(LiveExecutionClient):
             return float(last)
 
         return None
+
+    def _compute_paper_realized_pnl(self, is_buy: bool, fill_qty: float, fill_px: float) -> float:
+        """Update internal position state and return realized PnL from this fill."""
+        realized = 0.0
+        signed_qty = fill_qty if is_buy else -fill_qty
+
+        if self._paper_pos_qty == 0.0:
+            # Opening new position
+            self._paper_pos_qty = signed_qty
+            self._paper_pos_avg_px = fill_px
+        elif (self._paper_pos_qty > 0) == is_buy:
+            # Adding to existing position — update average entry
+            new_qty = self._paper_pos_qty + signed_qty
+            self._paper_pos_avg_px = (
+                (self._paper_pos_avg_px * abs(self._paper_pos_qty) + fill_px * fill_qty)
+                / abs(new_qty)
+            )
+            self._paper_pos_qty = new_qty
+        else:
+            # Reducing or flipping position
+            close_qty = min(fill_qty, abs(self._paper_pos_qty))
+            direction = 1.0 if self._paper_pos_qty > 0 else -1.0
+            realized = direction * (fill_px - self._paper_pos_avg_px) * close_qty
+            remaining = fill_qty - close_qty
+            self._paper_pos_qty += signed_qty
+            if abs(self._paper_pos_qty) < 1e-10:
+                self._paper_pos_qty = 0.0
+                self._paper_pos_avg_px = 0.0
+            elif remaining > 1e-10:
+                # Flipped to opposite side
+                self._paper_pos_avg_px = fill_px
+
+        return realized
 
     def _generate_paper_account_state(self) -> None:
         self.generate_account_state(

@@ -252,6 +252,7 @@ class HyperliquidLiveExecutionClient(LiveExecutionClient):
         if isinstance(fills, dict):
             fills = fills.get("fills", [])
 
+        processed = 0
         for fill in fills:
             oid = fill.get("oid")
             coin = fill.get("coin", "")
@@ -292,6 +293,11 @@ class HyperliquidLiveExecutionClient(LiveExecutionClient):
                 liquidity_side=LiquiditySide.MAKER if fill.get("dir", "") == "Open Long" else LiquiditySide.TAKER,
                 ts_event=ts_event,
             )
+            processed += 1
+
+        if processed:
+            # Re-fetch real account value from HL so the monitor reflects current balance
+            self.create_task(self._generate_account_state())
 
     def _handle_order_updates(self, msg: dict) -> None:
         updates = msg.get("data", [])
