@@ -15,7 +15,7 @@ services:
   #   HL_WALLET_ADDRESS, HL_PRIVATE_KEY
   #   GLOBAL_NOTIONAL_CEILING_USD=50000
   #   GLOBAL_MAX_OPS=10
-  #   STRATEGIES_DIR=/app/strategies
+  #   STRATEGIES_DIR=/opt/Hyperliquid/hl_engine/strategies  (host-absolute — set in .env)
   #   DB_PATH=/app/data/orchestrator.db
   orchestrator:
     build:
@@ -112,25 +112,6 @@ services:
       - ./data:/app/data
     profiles:
       - tools                         # not started by default; use --profile tools
-
-  # ── Live trader (APEX strategy) ─────────────────────────────────────
-  # Paper trade: HL_PAPER_TRADE=true in .env (default)
-  # Live trade:  set HL_PAPER_TRADE=false and add wallet credentials
-  live-trader:
-    build:
-      context: .
-      target: runtime
-    image: hl-engine:latest
-    command: python hl_engine/run_live.py
-    env_file: .env
-    volumes:
-      - ./data:/app/data
-    restart: unless-stopped
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "5"
 
   # ── Backtest ────────────────────────────────────────────────────────
   # Run with: docker compose run --rm backtest
