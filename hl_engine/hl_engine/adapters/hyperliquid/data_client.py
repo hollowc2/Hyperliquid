@@ -203,25 +203,52 @@ class HyperliquidLiveMarketDataClient(LiveMarketDataClient):
     # ------------------------------------------------------------------
 
     async def _recv_loop(self) -> None:
-        try:
-            async for raw in self._ws:
-                try:
-                    msg = json.loads(raw)
-                    channel = msg.get("channel", "")
-                    if channel == WS_TYPE_L2_BOOK:
-                        self._handle_l2_book(msg)
-                    elif channel == WS_TYPE_TRADES:
-                        self._handle_trades(msg)
-                    elif channel == WS_TYPE_CANDLE:
-                        self._handle_candle(msg)
-                    elif channel == WS_TYPE_ACTIVE_ASSET_CTX:
-                        self._handle_asset_ctx(msg)
-                    elif channel == WS_TYPE_WEB_DATA2:
-                        self._handle_web_data2(msg)
-                except Exception as e:
-                    self._log.error(f"Error handling WS message: {e}")
-        except websockets.ConnectionClosed:
-            self._log.warning("WebSocket connection closed")
+        backoff = 1.0
+        while True:
+            try:
+                async for raw in self._ws:
+                    backoff = 1.0  # reset on successful message
+                    try:
+                        msg = json.loads(raw)
+                        channel = msg.get("channel", "")
+                        if channel == WS_TYPE_L2_BOOK:
+                            self._handle_l2_book(msg)
+                        elif channel == WS_TYPE_TRADES:
+                            self._handle_trades(msg)
+                        elif channel == WS_TYPE_CANDLE:
+                            self._handle_candle(msg)
+                        elif channel == WS_TYPE_ACTIVE_ASSET_CTX:
+                            self._handle_asset_ctx(msg)
+                        elif channel == WS_TYPE_WEB_DATA2:
+                            self._handle_web_data2(msg)
+                    except Exception as e:
+                        self._log.error(f"Error handling WS message: {e}")
+            except asyncio.CancelledError:
+                return
+            except Exception as e:
+                self._log.warning(f"WebSocket connection lost: {e}")
+
+            # Reconnect with exponential backoff (cap at 60s)
+            self._log.info(f"Reconnecting in {backoff:.0f}s …")
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, 60.0)
+
+            try:
+                if self._ws:
+                    await self._ws.close()
+            except Exception:
+                pass
+
+            try:
+                self._ws = await websockets.connect(self._ws_url, ping_interval=None)
+                self._book_snapshots.clear()
+                # Re-subscribe to all active channels
+                for sub in list(self._subscriptions.values()):
+                    await self._ws.send(json.dumps(sub))
+                self._log.info("Reconnected to Hyperliquid WS and re-subscribed")
+                backoff = 1.0
+            except Exception as e:
+                self._log.error(f"Reconnect attempt failed: {e}")
 
     async def _ping_loop(self) -> None:
         while True:

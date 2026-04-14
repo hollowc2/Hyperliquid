@@ -220,6 +220,14 @@ class ApexStrategy(Strategy):
             limit=200,
         )
 
+        # Heartbeat: write state file every 5s even when no market data arrives
+        # (ensures the monitor shows "DISCONNECTED" rather than going permanently stale)
+        self.clock.set_timer(
+            name="state_heartbeat",
+            interval_ns=5_000_000_000,
+            callback=self._on_heartbeat,
+        )
+
         self.log.info(f"ApexStrategy started for {self._instrument_id}")
 
     def on_stop(self) -> None:
@@ -529,6 +537,11 @@ class ApexStrategy(Strategy):
     # State export for live monitoring dashboard
     # ------------------------------------------------------------------
 
+    def _on_heartbeat(self, event) -> None:
+        """Write state on timer tick so monitor stays alive during data gaps."""
+        book = self.cache.order_book(self._instrument_id) if self._instrument_id else None
+        self._write_state_file(book)
+
     def _write_state_file(self, book) -> None:
         """Write a JSON snapshot of strategy state to disk for the monitor UI."""
         import json
@@ -539,8 +552,8 @@ class ApexStrategy(Strategy):
         open_positions = self.cache.positions_open(instrument_id=self._instrument_id)
         if open_positions:
             pos = open_positions[0]
-            best_bid = book.best_bid_price()
-            best_ask = book.best_ask_price()
+            best_bid = book.best_bid_price() if book else None
+            best_ask = book.best_ask_price() if book else None
             mid = 0.0
             if best_bid and best_ask:
                 mid = (float(best_bid) + float(best_ask)) / 2.0
@@ -564,8 +577,8 @@ class ApexStrategy(Strategy):
                 balance = round(float(bal.as_double()), 2)
 
         # Mid price
-        best_bid = book.best_bid_price()
-        best_ask = book.best_ask_price()
+        best_bid = book.best_bid_price() if book else None
+        best_ask = book.best_ask_price() if book else None
         mid_px = 0.0
         if best_bid and best_ask:
             mid_px = round((float(best_bid) + float(best_ask)) / 2.0, 2)
