@@ -118,7 +118,9 @@ RUN --mount=type=cache,target=/root/.cache/uv \
         "websockets>=12.0" \
         "aiohttp>=3.9.0" \
         "asyncpg>=0.29.0" \
-        "python-dotenv>=1.0.0"
+        "python-dotenv>=1.0.0" \
+        "pyzmq>=25.0" \
+        "msgspec>=0.18.0"
 
 # Copy only what the TS recorder needs.
 # hl_engine is not installed as a package here; we put it on PYTHONPATH

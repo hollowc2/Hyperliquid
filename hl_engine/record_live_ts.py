@@ -29,9 +29,16 @@ import time
 
 import aiohttp
 import websockets
+import msgspec.msgpack as _msgpack
 from dotenv import load_dotenv
 
 from hl_engine.data.timescale_sink import TimescaleSink
+
+
+def _unwrap_zmq(frame: bytes) -> tuple[str, dict]:
+    """Decode a ZMQ msgpack frame; return (type_str, data_dict)."""
+    msg = _msgpack.decode(frame)
+    return str(msg["type"]), dict(msg.get("d", {}))
 
 load_dotenv()
 
@@ -56,6 +63,9 @@ INFO_URL: str = "https://api.hyperliquid.xyz/info"
 FLUSH_INTERVAL: int = int(os.getenv("HL_FLUSH_INTERVAL", "10"))
 L2_LEVELS: int = int(os.getenv("HL_L2_LEVELS", "10"))
 TS_DSN: str = os.environ["TS_DSN"]  # fail fast if missing
+# ZMQ_ENDPOINT: subscribe to orchestrator instead of opening a direct WS.
+# With network_mode: host, use tcp://127.0.0.1:5555 to reach the orchestrator.
+ZMQ_ENDPOINT: str | None = os.getenv("ZMQ_ENDPOINT")
 PING_INTERVAL: int = 50
 
 
@@ -69,9 +79,10 @@ class HyperliquidTSRecorder:
     and flushes to TimescaleDB on a configurable interval.
     """
 
-    def __init__(self, coins: list[str], sink: TimescaleSink) -> None:
+    def __init__(self, coins: list[str], sink: TimescaleSink, zmq_endpoint: str | None = None) -> None:
         self._coins = coins
         self._sink = sink
+        self._zmq_endpoint = zmq_endpoint
 
         # Raw buffers — tuples matching TimescaleSink.insert_* signatures
         self._trades: list[tuple] = []
@@ -84,10 +95,15 @@ class HyperliquidTSRecorder:
     async def run(self) -> None:
         self._running = True
         try:
-            async with asyncio.TaskGroup() as tg:
-                tg.create_task(self._ws_loop(),    name="ws_loop")
-                tg.create_task(self._flush_loop(), name="flush_loop")
-                tg.create_task(self._ping_loop(),  name="ping_loop")
+            if self._zmq_endpoint:
+                async with asyncio.TaskGroup() as tg:
+                    tg.create_task(self._zmq_loop(), name="zmq_loop")
+                    tg.create_task(self._flush_loop(), name="flush_loop")
+            else:
+                async with asyncio.TaskGroup() as tg:
+                    tg.create_task(self._ws_loop(),    name="ws_loop")
+                    tg.create_task(self._flush_loop(), name="flush_loop")
+                    tg.create_task(self._ping_loop(),  name="ping_loop")
         except* (asyncio.CancelledError, KeyboardInterrupt):
             pass
         finally:
@@ -138,6 +154,83 @@ class HyperliquidTSRecorder:
                     await self._ws.send(json.dumps({"method": "ping"}))
                 except Exception:
                     pass
+
+    # ------------------------------------------------------------------
+    # ZMQ subscriber loop  (replaces WS when zmq_endpoint is set)
+    # ------------------------------------------------------------------
+
+    async def _zmq_loop(self) -> None:
+        """Subscribe to orchestrator ZMQ PUB and dispatch to TimescaleDB buffers."""
+        import zmq
+        import zmq.asyncio as azmq
+
+        ctx = azmq.Context()
+        sock = ctx.socket(zmq.SUB)
+        sock.setsockopt(zmq.RCVHWM, 10_000)
+
+        for coin in self._coins:
+            iid = f"{coin}-USD.HYPERLIQUID"
+            for prefix in [f"orderbook.{iid}", f"trades.{iid}", f"bar.{iid}.1m"]:
+                sock.setsockopt(zmq.SUBSCRIBE, prefix.encode())
+
+        sock.connect(self._zmq_endpoint)
+        log.info(f"ZMQ SUB connected to {self._zmq_endpoint}, coins={self._coins}")
+
+        try:
+            while self._running:
+                try:
+                    parts = await asyncio.wait_for(sock.recv_multipart(), timeout=5.0)
+                except asyncio.TimeoutError:
+                    continue
+                if len(parts) < 2:
+                    continue
+                try:
+                    type_str, d = _unwrap_zmq(parts[1])
+                except Exception as e:
+                    log.error(f"Bad ZMQ frame: {e}")
+                    continue
+                try:
+                    coin = d.get("coin") or d.get("s", "")
+                    if coin not in self._coins:
+                        continue
+                    if type_str == "trade":
+                        self._trades.append((
+                            int(d.get("time", time.time() * 1000)),
+                            coin,
+                            float(d["px"]),
+                            float(d["sz"]),
+                            d.get("side", "S"),
+                            d.get("hash", "")[:36],
+                        ))
+                    elif type_str == "l2book":
+                        ts_ms = int(d.get("time", time.time() * 1000))
+                        for side_idx, side_levels in enumerate(d.get("levels", [[], []])[:2]):
+                            side_char = "B" if side_idx == 0 else "A"
+                            for lvl_idx, level in enumerate(side_levels[:L2_LEVELS]):
+                                self._l2.append((
+                                    ts_ms,
+                                    coin,
+                                    side_char,
+                                    lvl_idx,
+                                    float(level["px"]),
+                                    float(level["sz"]),
+                                ))
+                    elif type_str == "candle":
+                        ts_ms = int(d.get("T", d.get("t", time.time() * 1000)))
+                        self._bars.append((
+                            ts_ms,
+                            coin,
+                            float(d["o"]),
+                            float(d["h"]),
+                            float(d["l"]),
+                            float(d["c"]),
+                            float(d["v"]),
+                        ))
+                except Exception as e:
+                    log.error(f"Handler error ({type_str}): {e}")
+        finally:
+            sock.close()
+            ctx.term()
 
     # ------------------------------------------------------------------
     # Message routing
@@ -256,13 +349,14 @@ class HyperliquidTSRecorder:
 # ---------------------------------------------------------------------------
 
 async def main() -> None:
-    log.info(f"Starting | coins={COINS} | flush={FLUSH_INTERVAL}s | l2_levels={L2_LEVELS}")
+    source = f"zmq={ZMQ_ENDPOINT}" if ZMQ_ENDPOINT else f"ws={WS_URL}"
+    log.info(f"Starting | coins={COINS} | flush={FLUSH_INTERVAL}s | l2_levels={L2_LEVELS} | source={source}")
 
     sink = TimescaleSink(dsn=TS_DSN)
     await sink.connect()
     await sink.init_schema()
 
-    recorder = HyperliquidTSRecorder(coins=COINS, sink=sink)
+    recorder = HyperliquidTSRecorder(coins=COINS, sink=sink, zmq_endpoint=ZMQ_ENDPOINT)
 
     loop = asyncio.get_running_loop()
     task = loop.create_task(recorder.run())

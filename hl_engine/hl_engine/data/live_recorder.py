@@ -117,10 +117,16 @@ class HyperliquidRecorder:
         Destination ParquetDataCatalog directory.
     flush_interval : int
         Seconds between catalog writes (default 60).
+    zmq_endpoint : str | None
+        If set, subscribe to orchestrator ZMQ PUB (e.g. ``tcp://orchestrator:5555``)
+        instead of opening a direct WebSocket to Hyperliquid.
     ws_url : str
-        Hyperliquid WebSocket URL.
+        Hyperliquid WebSocket URL (used only when zmq_endpoint is None).
     info_url : str
-        Hyperliquid REST /info URL.
+        Hyperliquid REST /info URL (always used for instrument metadata).
+    wallet_address : str | None
+        Wallet address for liquidation recording (WS-mode only; in ZMQ mode
+        liquidations arrive from the orchestrator automatically).
     """
 
     def __init__(
@@ -128,6 +134,7 @@ class HyperliquidRecorder:
         coins: list[str],
         catalog_path: str | Path,
         flush_interval: int = 60,
+        zmq_endpoint: Optional[str] = None,
         ws_url: str = HL_WS_URL,
         info_url: str = HL_BASE_URL + HL_INFO_ENDPOINT,
         wallet_address: Optional[str] = None,
@@ -136,6 +143,7 @@ class HyperliquidRecorder:
         self._catalog = ParquetDataCatalog(str(catalog_path))
         self._catalog_path = Path(catalog_path)
         self._flush_interval = flush_interval
+        self._zmq_endpoint = zmq_endpoint
         self._ws_url = ws_url
         self._info_url = info_url
         self._wallet_address = wallet_address
@@ -168,10 +176,15 @@ class HyperliquidRecorder:
         self._write_instruments()
 
         try:
-            async with asyncio.TaskGroup() as tg:
-                tg.create_task(self._ws_loop(), name="ws_loop")
-                tg.create_task(self._flush_loop(), name="flush_loop")
-                tg.create_task(self._ping_loop(), name="ping_loop")
+            if self._zmq_endpoint:
+                async with asyncio.TaskGroup() as tg:
+                    tg.create_task(self._zmq_loop(), name="zmq_loop")
+                    tg.create_task(self._flush_loop(), name="flush_loop")
+            else:
+                async with asyncio.TaskGroup() as tg:
+                    tg.create_task(self._ws_loop(), name="ws_loop")
+                    tg.create_task(self._flush_loop(), name="flush_loop")
+                    tg.create_task(self._ping_loop(), name="ping_loop")
         except* (asyncio.CancelledError, KeyboardInterrupt):
             pass
         finally:
@@ -272,6 +285,78 @@ class HyperliquidRecorder:
                     await self._ws.send(json.dumps({"method": "ping"}))
                 except Exception:
                     pass
+
+    # ------------------------------------------------------------------
+    # ZMQ subscriber loop  (replaces WS when zmq_endpoint is set)
+    # ------------------------------------------------------------------
+
+    async def _zmq_loop(self) -> None:
+        """Subscribe to orchestrator ZMQ PUB and dispatch messages to handlers."""
+        import zmq
+        import zmq.asyncio as azmq
+        from hl_engine.transport.serialization import unwrap
+
+        ctx = azmq.Context()
+        sock = ctx.socket(zmq.SUB)
+        sock.setsockopt(zmq.RCVHWM, 10_000)
+
+        for coin in self._instruments:
+            iid = f"{coin}-USD.HYPERLIQUID"
+            for prefix in [
+                f"orderbook.{iid}",
+                f"trades.{iid}",
+                f"bar.{iid}.1m",
+                f"funding.{iid}",
+                f"liquidation.{iid}",
+            ]:
+                sock.setsockopt(zmq.SUBSCRIBE, prefix.encode())
+
+        sock.connect(self._zmq_endpoint)
+        log.info(f"ZMQ SUB connected to {self._zmq_endpoint}, coins={list(self._instruments)}")
+
+        try:
+            while self._running:
+                try:
+                    parts = await asyncio.wait_for(sock.recv_multipart(), timeout=5.0)
+                except asyncio.TimeoutError:
+                    continue
+                if len(parts) < 2:
+                    continue
+                try:
+                    _, _, type_str, d = unwrap(parts[1])
+                except (ValueError, KeyError) as e:
+                    log.error(f"Bad ZMQ frame: {e}")
+                    continue
+                try:
+                    if type_str == "l2book":
+                        self._handle_zmq_l2book(d)
+                    elif type_str == "trade":
+                        self._handle_trades({"data": [d]})
+                    elif type_str == "candle":
+                        self._handle_candle({"data": d})
+                    elif type_str == "asset_ctx":
+                        coin = d.get("coin", "")
+                        ctx_inner = {k: v for k, v in d.items() if k != "coin"}
+                        self._handle_asset_ctx({"data": {"coin": coin, "ctx": ctx_inner}})
+                    elif type_str == "liquidation":
+                        self._handle_web_data2({"data": {"liquidations": [d]}})
+                except Exception as e:
+                    log.error(f"Handler error ({type_str}): {e}")
+        finally:
+            sock.close()
+            ctx.term()
+
+    def _handle_zmq_l2book(self, d: dict) -> None:
+        """
+        Adapter for ZMQ l2book messages.
+
+        The orchestrator pre-computes is_snapshot; we honour it by clearing
+        _book_initialized so the existing handler treats the message correctly.
+        """
+        coin = d.get("coin", "")
+        if d.get("is_snapshot") and coin in self._book_initialized:
+            self._book_initialized.discard(coin)
+        self._handle_l2_book({"data": d})
 
     # ------------------------------------------------------------------
     # Message routing

@@ -43,14 +43,15 @@ services:
         max-file: "5"
 
   # ── TimescaleDB live recorder ───────────────────────────────────────
-  # Streams L2 order book, trade ticks, and 1m bars from Hyperliquid
-  # and writes them directly into the butterfly_timescaledb container.
+  # Subscribes to orchestrator ZMQ PUB (5555) and writes to TimescaleDB.
+  # Uses host networking so the container can reach both:
+  #   - orchestrator ZMQ on 127.0.0.1:5555 (port-mapped to host)
+  #   - TimescaleDB on 127.0.0.1:5432
   #
   # Requires in .env:
   #   TS_DSN=postgresql://hl_user:secret@localhost:5432/market_data
   #   HL_RECORD_COINS=BTC,ETH,SOL
   #
-  # Uses host networking so the container can reach 127.0.0.1:5432.
   # Build: docker compose build ts-recorder
   # Run:   docker compose up -d ts-recorder
   ts-recorder:
@@ -60,7 +61,11 @@ services:
     image: apex-collector:latest
     command: python record_live_ts.py
     env_file: .env
+    environment:
+      ZMQ_ENDPOINT: "tcp://127.0.0.1:5555"   # orchestrator port-mapped to host
     network_mode: host           # reaches butterfly_timescaledb on 127.0.0.1:5432
+    depends_on:
+      - orchestrator
     restart: unless-stopped
     logging:
       driver: "json-file"
@@ -69,8 +74,8 @@ services:
         max-file: "5"
 
   # ── Live data recorder (Parquet catalog) ────────────────────────────
-  # Streams L2 order book, trade ticks, and 1m bars from Hyperliquid
-  # and writes them to ./data/catalog for backtesting.
+  # Subscribes to orchestrator ZMQ PUB (5555) and writes to Parquet
+  # catalog at ./data/catalog for backtesting.
   recorder:
     build:
       context: .
@@ -78,8 +83,14 @@ services:
     image: hl-engine:latest
     command: python record_live_data.py
     env_file: .env                    # HL_RECORD_COINS, HL_CATALOG_PATH, etc.
+    environment:
+      ZMQ_ENDPOINT: "tcp://orchestrator:5555"
     volumes:
       - ./data:/app/data              # catalog persists on host
+    networks:
+      - hl-net                        # shares network with orchestrator for ZMQ
+    depends_on:
+      - orchestrator
     restart: unless-stopped
     logging:
       driver: "json-file"
