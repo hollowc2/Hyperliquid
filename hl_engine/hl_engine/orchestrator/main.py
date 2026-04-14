@@ -75,6 +75,11 @@ async def main() -> None:
     global_ceiling = float(os.getenv("GLOBAL_NOTIONAL_CEILING_USD", "50000"))
     global_max_ops = float(os.getenv("GLOBAL_MAX_OPS", "10"))
     strategies_dir = os.getenv("STRATEGIES_DIR", "strategies")
+    # STRATEGIES_HOST_PATH is the host-absolute path used by DockerManager when
+    # mounting the strategies directory into strategy containers via the Docker socket.
+    # Defaults to STRATEGIES_DIR so bare (non-Docker) setups work unchanged.
+    strategies_host_path = os.getenv("STRATEGIES_HOST_PATH", strategies_dir)
+    data_host_path = os.getenv("DATA_HOST_PATH", "data")
     db_path = os.getenv("DB_PATH", "data/orchestrator.db")
     bind_host = os.getenv("ORCHESTRATOR_HOST", "0.0.0.0")
     network_name = os.getenv("DOCKER_NETWORK", "hl-net")
@@ -120,7 +125,8 @@ async def main() -> None:
     # ------------------------------------------------------------------
     docker_mgr = DockerManager(
         network_name=network_name,
-        strategies_host_path=strategies_dir,
+        strategies_host_path=strategies_host_path,
+        data_host_path=data_host_path,
         orchestrator_host="orchestrator",
     )
 

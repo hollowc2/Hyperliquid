@@ -222,9 +222,10 @@ class ApexStrategy(Strategy):
 
         # Heartbeat: write state file every 5s even when no market data arrives
         # (ensures the monitor shows "DISCONNECTED" rather than going permanently stale)
+        from datetime import timedelta
         self.clock.set_timer(
             name="state_heartbeat",
-            interval_ns=5_000_000_000,
+            interval=timedelta(seconds=5),
             callback=self._on_heartbeat,
         )
 

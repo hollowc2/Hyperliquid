@@ -36,10 +36,12 @@ class DockerManager:
         self,
         network_name: str = "hl-net",
         strategies_host_path: str = "./strategies",
+        data_host_path: str = "./data",
         orchestrator_host: str = "orchestrator",
     ) -> None:
         self._network = network_name
         self._strategies_host_path = os.path.abspath(strategies_host_path)
+        self._data_host_path = os.path.abspath(data_host_path)
         self._orchestrator_host = orchestrator_host
 
         try:
@@ -89,6 +91,7 @@ class DockerManager:
                 environment=env,
                 volumes={
                     self._strategies_host_path: {"bind": "/strategies", "mode": "ro"},
+                    self._data_host_path: {"bind": "/app/data", "mode": "rw"},
                 },
                 network=self._network,
                 detach=True,
