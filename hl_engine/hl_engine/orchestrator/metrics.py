@@ -88,3 +88,33 @@ fill_latency = Histogram(
     ["strategy"],
     buckets=[10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000],
 )
+
+# ---------------------------------------------------------------------------
+# Initialisation helper
+# ---------------------------------------------------------------------------
+
+_SIDES = ("buy", "sell")
+_ORDER_TYPES = ("limit", "market")
+_REJECT_REASONS = ("rate_limit", "risk", "circuit_breaker", "hl_error")
+
+
+def init_strategy_metrics(strategy_id: str) -> None:
+    """
+    Pre-register all strategy-scoped label combinations so they appear in
+    /metrics as zero-valued series immediately after a strategy connects,
+    rather than only after the first event fires.
+
+    Call this whenever a new strategy_id is registered with the orchestrator.
+    """
+    for side in _SIDES:
+        fills_total.labels(strategy=strategy_id, side=side)
+        for order_type in _ORDER_TYPES:
+            orders_submitted.labels(strategy=strategy_id, side=side, order_type=order_type)
+
+    for reason in _REJECT_REASONS:
+        orders_rejected.labels(strategy=strategy_id, reason=reason)
+
+    circuit_breaker_trips.labels(strategy=strategy_id)
+    circuit_breaker_open.labels(strategy=strategy_id).set(0)
+
+    fill_latency.labels(strategy=strategy_id)

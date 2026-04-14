@@ -50,6 +50,9 @@ data_feed = None         # OrchestratorDataFeed
 # {strategy_id: {instance_id, registered_at}}
 _registered_strategies: dict[str, dict] = {}
 
+# strategies whose Prometheus label-sets have been pre-registered
+_metrics_initialized: set[str] = set()
+
 
 # ---------------------------------------------------------------------------
 # Request/Response models
@@ -78,6 +81,11 @@ class RegisterRequest(BaseModel):
 
 @app.post("/orders")
 async def submit_order(req: OrderRequest):
+    # Lazy Prometheus label-set initialisation — fires once per strategy_id
+    if req.strategy_id not in _metrics_initialized:
+        metrics.init_strategy_metrics(req.strategy_id)
+        _metrics_initialized.add(req.strategy_id)
+
     # 1. Idempotency check
     existing_oid = await persistence.check_order_idempotent(req.client_order_id)
     if existing_oid is not None:
@@ -102,17 +110,10 @@ async def submit_order(req: OrderRequest):
 
     # 4. Risk check
     coin = req.instrument_id.split("-")[0]
-    # Estimate notional: use price for LIMIT, or 0 for MARKET (risk check uses qty * approx px)
-    notional = (req.price or 0.0) * req.quantity
-    allowed, reason = await risk_manager.check_order(req.strategy_id, notional, req.is_reduce)
-    if not allowed:
-        metrics.orders_rejected.labels(strategy=req.strategy_id, reason="risk").inc()
-        raise HTTPException(status_code=422, detail=reason)
-
-    # 5. Build HL order params
     is_buy = req.side.upper() == "BUY"
     sz = req.quantity
 
+    # 5. Build HL order params (needed before notional estimate for MARKET orders)
     if req.order_type.upper() == "MARKET":
         # HL uses IOC limit with slippage buffer for market orders
         ref_px = req.price or 0.0
@@ -137,12 +138,22 @@ async def submit_order(req: OrderRequest):
     else:
         raise HTTPException(status_code=422, detail=f"Unsupported order type: {req.order_type}")
 
+    # Notional estimate uses limit_px (correct for both MARKET and LIMIT paths)
+    notional = limit_px * sz
+
+    allowed, reason = await risk_manager.check_order(req.strategy_id, notional, req.is_reduce)
+    if not allowed:
+        metrics.orders_rejected.labels(strategy=req.strategy_id, reason="risk").inc()
+        raise HTTPException(status_code=422, detail=reason)
+
     # 6. Submit to Hyperliquid (or mock in paper-trade mode)
+    side_label = "buy" if is_buy else "sell"
     if order_gateway is None:
-        # Paper-trade / no private key: return a synthetic oid
+        # Paper-trade / no private key: return a synthetic oid and count as immediate fill
         import random
         oid = random.randint(100_000, 999_999)
         log.info(f"[PAPER] Mock order accepted: {req.strategy_id} {req.side} {sz} {coin} @ {limit_px} → mock_oid={oid}")
+        metrics.fills_total.labels(strategy=req.strategy_id, side=side_label).inc()
     else:
         try:
             result = await order_gateway.submit_order(coin, is_buy, sz, limit_px, order_type_dict)
@@ -181,7 +192,7 @@ async def submit_order(req: OrderRequest):
 
     metrics.orders_submitted.labels(
         strategy=req.strategy_id,
-        side=req.side.lower(),
+        side=side_label,
         order_type=req.order_type.lower(),
     ).inc()
 
@@ -271,6 +282,9 @@ async def register_strategy(strategy_id: str, req: RegisterRequest):
     if spec:
         rate_limiter.configure_strategy(strategy_id, spec.rate_limit.max_orders_per_second)
         risk_manager.configure_strategy(strategy_id, spec.risk.max_position_usd)
+
+    # Pre-register Prometheus label combinations so all series appear immediately
+    metrics.init_strategy_metrics(strategy_id)
 
     log.info(f"Strategy registered: {strategy_id} instance={req.instance_id[:8]}")
     return {"status": "registered", "strategy_id": strategy_id}
