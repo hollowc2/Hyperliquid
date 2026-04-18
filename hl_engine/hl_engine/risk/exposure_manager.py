@@ -111,6 +111,19 @@ class ExposureManager:
         drawdown = (self._peak_equity - self._current_equity) / self._peak_equity
         return drawdown >= self._drawdown_reduce_threshold
 
+    def pin_at_limit(self) -> None:
+        """
+        Pin tracked notional at the max limit, blocking all subsequent new-order
+        checks until update_notional() is called with a lower value (e.g. after a
+        fill that reduces the position below the limit).
+        """
+        self._total_notional = self._max_position_usd
+
+    @property
+    def tracked_notional(self) -> float:
+        """Current tracked notional exposure (USD)."""
+        return self._total_notional
+
     @property
     def current_drawdown(self) -> float:
         """Current drawdown fraction [0, 1]."""

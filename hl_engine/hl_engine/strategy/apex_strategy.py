@@ -325,13 +325,26 @@ class ApexStrategy(Strategy):
         self._trade_count += 1
         self._total_commission += float(event.commission.as_double()) if hasattr(event.commission, "as_double") else float(str(event.commission).split()[0])
 
-        # Update exposure manager with current equity
+        # Update exposure manager with current equity and actual position notional.
+        # This also unpins a pin_at_limit() if the position has been reduced below max.
         account = self.portfolio.account(self._instrument_id.venue)
         if account:
             from nautilus_trader.model.currencies import USDC
             bal = account.balance_total(USDC)
             if bal is not None:
                 self._exposure_manager.update_equity(float(bal.as_double()))
+
+        if self._exposure_manager is not None:
+            open_positions = self.cache.positions_open(instrument_id=self._instrument_id)
+            if open_positions:
+                pos = open_positions[0]
+                book = self.cache.order_book(self._instrument_id)
+                best_bid = book.best_bid_price() if book else None
+                mid = float(best_bid) if best_bid else float(pos.avg_px_open)
+                actual_notional = float(pos.quantity) * mid
+            else:
+                actual_notional = 0.0
+            self._exposure_manager.update_notional(actual_notional)
 
     def on_order_canceled(self, event) -> None:
         """Clear active order tracker on cancel."""
@@ -343,6 +356,16 @@ class ApexStrategy(Strategy):
         if self._active_order_id and event.client_order_id == self._active_order_id:
             self._active_order_id = None
             self.log.warning(f"Order rejected: {event.reason}")
+            # Pin the local notional at the limit so the ExposureManager blocks
+            # all further new-order attempts until a fill reduces the position.
+            # This prevents a tight retry loop when the orchestrator is rejecting
+            # because the real position on Hyperliquid already exceeds the limit
+            # but the local NautilusTrader cache is stale.
+            if self._exposure_manager and "notional" in (event.reason or "").lower():
+                self._exposure_manager.pin_at_limit()
+                self.log.warning(
+                    "Notional limit hit — halting new orders until position is reduced"
+                )
 
     # ------------------------------------------------------------------
     # Signal evaluation and execution
@@ -481,10 +504,12 @@ class ApexStrategy(Strategy):
             self.log.debug(f"Order blocked by risk: {reason}")
             return
 
-        # Update notional estimate
-        self._exposure_manager.update_notional(
-            abs(current_position_usd) + order_notional
-        )
+        # Update notional estimate. Take the max of what the position cache reports
+        # and what we're already tracking — this prevents the tracked value from
+        # being silently reset downward when the NautilusTrader cache is stale
+        # (e.g. on container restart before reconciliation completes).
+        seeded_notional = max(abs(current_position_usd), self._exposure_manager.tracked_notional)
+        self._exposure_manager.update_notional(seeded_notional + order_notional)
 
         # Route the order
         decision = self._order_router.route(

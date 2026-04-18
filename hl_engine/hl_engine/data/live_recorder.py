@@ -154,7 +154,9 @@ class HyperliquidRecorder:
         # Standard NT data buffers
         self._ob_deltas: list[OrderBookDelta] = []
         self._trade_ticks: list[TradeTick] = []
-        self._bars: list[Bar] = []
+        # Keyed by (bar_type_str, ts_event) so mid-candle WS updates overwrite
+        # rather than accumulate — Hyperliquid emits one update per trade tick.
+        self._bars: dict[tuple, Bar] = {}
 
         # Custom data buffers (list of row dicts, flushed to Parquet)
         self._funding_rows: list[dict] = []
@@ -495,7 +497,7 @@ class HyperliquidRecorder:
             ts_event=ts_event,
             ts_init=time.time_ns(),
         )
-        self._bars.append(bar)
+        self._bars[(str(bar_type), ts_event)] = bar
 
     # ------------------------------------------------------------------
     # Funding rate + open interest  (activeAssetCtx)
@@ -581,8 +583,9 @@ class HyperliquidRecorder:
             self._trade_ticks.clear()
 
         if self._bars:
-            self._catalog.write_data(data=self._bars)
-            counts["Bar"] = len(self._bars)
+            bars = list(self._bars.values())
+            self._catalog.write_data(data=bars)
+            counts["Bar"] = len(bars)
             self._bars.clear()
 
         if self._funding_rows:
