@@ -42,8 +42,6 @@ from hl_engine.strategy.apex_strategy import ApexStrategy
 # --- Configuration ---
 CATALOG_PATH = Path(os.getenv("HL_CATALOG_PATH", "data/catalog"))
 INSTRUMENT_ID = os.getenv("HL_INSTRUMENT_ID", "BTC-USD.HYPERLIQUID")
-START_TIME = os.getenv("HL_START_DATE", "2026-04-09")
-END_TIME = os.getenv("HL_END_DATE", "2026-04-13")
 STARTING_BALANCE_USDC = float(os.getenv("HL_STARTING_BALANCE", "100000"))
 
 
@@ -253,13 +251,37 @@ def _resample_bars(bars_1m, bar_minutes: int, instrument):
     return out
 
 
+def _catalog_date_range(catalog_path: Path, instrument_id: str) -> tuple[str, str]:
+    """Return (first_date, last_date) strings from bar parquet filenames, or defaults."""
+    files = _bar_parquet_files(catalog_path, instrument_id)
+    if not files:
+        return ("2026-04-12", "2026-04-19")
+    # Compacted files are named YYYY-MM-DD.parquet
+    names = sorted(f.stem for f in files if f.stem.count("-") == 2)
+    if names:
+        return (names[0], names[-1])
+    return ("2026-04-12", "2026-04-19")
+
+
 def main() -> None:
+    default_start, default_end = _catalog_date_range(CATALOG_PATH, INSTRUMENT_ID)
+
     parser = argparse.ArgumentParser(description="APEX Trader backtest runner")
     parser.add_argument(
         "--strategy",
         choices=["apex", "ma"],
         default="apex",
         help="Strategy to run: 'apex' (full ApexStrategy) or 'ma' (MA crossover smoke test)",
+    )
+    parser.add_argument(
+        "--start",
+        default=os.getenv("HL_START_DATE", default_start),
+        help=f"Start date YYYY-MM-DD (default: {default_start}, earliest available bar data)",
+    )
+    parser.add_argument(
+        "--end",
+        default=os.getenv("HL_END_DATE", default_end),
+        help=f"End date YYYY-MM-DD (default: {default_end}, latest available bar data)",
     )
     parser.add_argument(
         "--bar-minutes",
@@ -272,7 +294,8 @@ def main() -> None:
         "--with-ob",
         action="store_true",
         default=False,
-        help="Load L2 order book data (enables OBI/microprice features but uses significant RAM).",
+        help="Load L2 order book data (enables OBI/microprice features). "
+             "Uses ~4-8 GB RAM per week of data — limit date range accordingly.",
     )
     args = parser.parse_args()
 
@@ -283,8 +306,10 @@ def main() -> None:
     has_trades = _catalog_has(catalog, TradeTick, instrument_id)
     has_bars = len(_bar_parquet_files(CATALOG_PATH, INSTRUMENT_ID)) > 0
 
-    start_ns = _parse_ts(START_TIME)
-    end_ns = _parse_ts(END_TIME)
+    start_ns = _parse_ts(args.start)
+    end_ns = _parse_ts(args.end)
+
+    print(f"Backtest window: {args.start} → {args.end}")
 
     # Funding and OI are loaded without a lower time bound so that historical
     # records written by build_historical_catalog.py pre-seed the FundingModel
