@@ -25,6 +25,7 @@ dependencies = [
     "tenacity>=8.2.0",
     "aiosqlite>=0.20.0",
     "prometheus-client>=0.20.0",
+    "textual>=0.80",
 ]
 
 [project.scripts]

@@ -11,6 +11,8 @@ Endpoints:
   POST   /strategies/{id}/start       Start a strategy container
   POST   /strategies/{id}/stop        Stop a strategy container
   POST   /strategies/{id}/register    Called by strategy container on connect
+  POST   /strategies/{id}/state       Strategy pushes its state dict (monitor cache)
+  GET    /strategies/{id}/state       Monitor polls strategy state (404 if not pushed yet)
   GET    /reconcile/{strategy_id}     Open orders + account state for resync
   GET    /snapshot/{instrument_id}    Current L2 book snapshot
   GET    /risk                        Global risk summary
@@ -21,7 +23,7 @@ Endpoints:
 
 import logging
 import time
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import Response
@@ -52,6 +54,9 @@ _registered_strategies: dict[str, dict] = {}
 
 # strategies whose Prometheus label-sets have been pre-registered
 _metrics_initialized: set[str] = set()
+
+# Strategy state cache — dumb KV store, strategies POST here, monitor GETs here
+_strategy_states: dict[str, Any] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -288,6 +293,25 @@ async def register_strategy(strategy_id: str, req: RegisterRequest):
 
     log.info(f"Strategy registered: {strategy_id} instance={req.instance_id[:8]}")
     return {"status": "registered", "strategy_id": strategy_id}
+
+
+# ---------------------------------------------------------------------------
+# Strategy state cache (monitor polling)
+# ---------------------------------------------------------------------------
+
+@app.post("/strategies/{strategy_id}/state")
+async def push_strategy_state(strategy_id: str, state: dict[str, Any]):
+    """Strategy pushes its state dict; orchestrator is a dumb cache."""
+    _strategy_states[strategy_id] = state
+    return {"status": "ok"}
+
+
+@app.get("/strategies/{strategy_id}/state")
+async def get_strategy_state(strategy_id: str):
+    """Monitor polls this; 404 if the strategy has never pushed state."""
+    if strategy_id not in _strategy_states:
+        raise HTTPException(status_code=404, detail=f"No state for {strategy_id!r}")
+    return _strategy_states[strategy_id]
 
 
 # ---------------------------------------------------------------------------

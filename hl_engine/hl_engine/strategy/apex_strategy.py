@@ -666,3 +666,28 @@ class ApexStrategy(Strategy):
                 json.dump(state, f)
         except Exception:
             pass  # Never let monitoring I/O crash the strategy
+
+        # Non-blocking push to orchestrator for TUI monitor
+        import asyncio
+        import os
+        orch_url = os.getenv("ORCHESTRATOR_REST_URL", "")
+        if orch_url:
+            try:
+                asyncio.get_running_loop().create_task(
+                    self._push_state_to_orchestrator(orch_url, state)
+                )
+            except RuntimeError:
+                pass  # No running loop (e.g. backtest context)
+
+    async def _push_state_to_orchestrator(self, base_url: str, state: dict) -> None:
+        """Fire-and-forget POST of state dict to orchestrator cache."""
+        import aiohttp
+        try:
+            async with aiohttp.ClientSession() as session:
+                await session.post(
+                    f"{base_url}/strategies/apex-btc/state",
+                    json=state,
+                    timeout=aiohttp.ClientTimeout(total=2.0),
+                )
+        except Exception as exc:
+            self.log.warning(f"Orchestrator state push failed: {exc}")

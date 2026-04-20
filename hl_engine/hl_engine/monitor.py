@@ -9,9 +9,9 @@ Usage (from hl_engine/ directory):
     uv run python hl_engine/monitor.py --state data/apex_state.json
     uv run python hl_engine/monitor.py --refresh 0.5
 
-Multi-strategy mode (reads from orchestrator REST API):
+Multi-strategy mode (Textual TUI, reads from orchestrator REST API):
     uv run python hl_engine/monitor.py --multi
-    uv run python hl_engine/monitor.py --multi --url http://localhost:8000
+    uv run python hl_engine/monitor.py --multi --url http://localhost:8100
 """
 
 import argparse
@@ -29,6 +29,9 @@ from rich.live import Live
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
+from textual.app import App, ComposeResult
+from textual.containers import Horizontal
+from textual.widgets import Static
 
 
 DEFAULT_STATE_FILE = "data/apex_state.json"
@@ -52,6 +55,25 @@ def _age_str(ts_iso: str) -> str:
 def _signed(val: float, precision: int = 4, suffix: str = "") -> Text:
     s = f"{val:+.{precision}f}{suffix}"
     return Text(s, style="green" if val >= 0 else "red")
+
+
+def _ascii_bar(val: float, lo: float = -1.0, hi: float = 1.0, width: int = 16) -> str:
+    """Centered ASCII bar for feature visualization."""
+    clamped = max(lo, min(hi, val))
+    frac = (clamped - lo) / (hi - lo)
+    filled = int(frac * width)
+    center = width // 2
+    bar_chars = [" "] * width
+    if filled >= center:
+        for i in range(center, min(filled, width)):
+            bar_chars[i] = "█"
+    else:
+        for i in range(max(0, filled), center):
+            bar_chars[i] = "█"
+    color = "green" if val >= 0 else "red"
+    left_half = "".join(bar_chars[:center])
+    right_half = "".join(bar_chars[center:])
+    return f"[{color}]{left_half}[/{color}][dim]|[/dim][{color}]{right_half}[/{color}]"
 
 
 def build_dashboard(state: dict, state_file: str, err: str | None) -> Layout:
@@ -206,118 +228,307 @@ def load_state(path: str) -> tuple[dict, str | None]:
         return {}, f"Read error: {e}"
 
 
-# ── Multi-strategy dashboard ──────────────────────────────────────────────────
+# ── Textual TUI (--multi mode) ────────────────────────────────────────────────
 
-def _fetch_multi_state(base_url: str) -> tuple[list, dict, str | None]:
-    """Fetch strategy list and risk summary from orchestrator."""
-    try:
-        with httpx.Client(base_url=base_url, timeout=5.0) as client:
-            strategies_resp = client.get("/strategies")
-            strategies_resp.raise_for_status()
-            risk_resp = client.get("/risk")
-            risk_resp.raise_for_status()
-            return strategies_resp.json(), risk_resp.json(), None
-    except httpx.ConnectError:
-        return [], {}, f"Cannot connect to orchestrator at {base_url}"
-    except Exception as e:
-        return [], {}, str(e)
+class OrchestratorApp(App):
+    """Textual TUI for multi-strategy monitoring."""
 
+    CSS = """
+    Screen {
+        layout: vertical;
+    }
+    #top-bar {
+        height: 3;
+        background: navy;
+        color: white;
+        padding: 0 1;
+        content-align: left middle;
+    }
+    #main-body {
+        height: 1fr;
+    }
+    #strategy-list-pane {
+        width: 30%;
+        height: 100%;
+        overflow-y: auto;
+    }
+    #detail-pane {
+        width: 1fr;
+        height: 100%;
+        overflow-y: auto;
+    }
+    #bottom-bar {
+        height: 3;
+        padding: 0 1;
+        content-align: left middle;
+        border-top: solid $accent;
+    }
+    """
 
-def build_multi_dashboard(strategies: list, risk: dict, base_url: str, err: str | None) -> Layout:
-    layout = Layout()
-    layout.split_column(
-        Layout(name="header", size=3),
-        Layout(name="body"),
-        Layout(name="footer", size=5),
-    )
+    BINDINGS = [
+        ("up", "cursor_up", "Up"),
+        ("down", "cursor_down", "Down"),
+        ("s", "start_strategy", "Start"),
+        ("x", "stop_strategy", "Stop"),
+        ("q", "quit", "Quit"),
+    ]
 
-    # ── Header ────────────────────────────────────────────────────────
-    now = datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
-    if err:
-        header_text = Text(f"  Multi-Strategy Monitor  |  {err}", style="bold red on dark_red")
-    else:
-        global_notional = risk.get("global_notional_usd", 0.0)
-        global_ceiling = risk.get("global_ceiling_usd", 0.0)
-        util = (global_notional / global_ceiling * 100) if global_ceiling else 0.0
-        util_color = "green" if util < 70 else "yellow" if util < 90 else "red"
-        header_text = Text()
-        header_text.append("  Multi-Strategy Monitor  ", style="bold white on navy_blue")
-        header_text.append(f"  {base_url}  ", style="dim")
-        header_text.append(f"  Global: ${global_notional:,.0f} / ${global_ceiling:,.0f}  ", style="white")
-        header_text.append(f"({util:.1f}% utilized)  ", style=f"bold {util_color}")
-        header_text.append(f"  {now}  ", style="dim")
-    layout["header"].update(Panel(header_text, border_style="bright_blue"))
+    def __init__(self, base_url: str) -> None:
+        super().__init__()
+        self._base_url = base_url
+        self._strategies: list = []
+        self._risk: dict = {}
+        self._selected_index: int = 0
+        self._strategy_state: dict = {}
+        self._state_avail: bool = False
 
-    # ── Body: strategy table ──────────────────────────────────────────
-    strat_table = Table(show_lines=True, expand=True)
-    strat_table.add_column("ID", style="bold cyan", no_wrap=True)
-    strat_table.add_column("Container", style="dim")
-    strat_table.add_column("Status", justify="center")
-    strat_table.add_column("Instance", style="dim", justify="center")
-    strat_table.add_column("Notional USD", justify="right")
-    strat_table.add_column("Max USD", justify="right", style="dim")
-    strat_table.add_column("Utilization", justify="right")
-    strat_table.add_column("Circuit Breaker", justify="center")
-    strat_table.add_column("Registered At", style="dim")
+    def compose(self) -> ComposeResult:
+        yield Static("", id="top-bar")
+        with Horizontal(id="main-body"):
+            yield Static("", id="strategy-list-pane")
+            yield Static("", id="detail-pane")
+        yield Static("", id="bottom-bar")
 
-    per_strategy_risk = risk.get("strategies", {})
+    def on_mount(self) -> None:
+        self.set_interval(1.0, self._poll_overview)
+        self.set_interval(0.5, self._poll_state)
+        self._render_footer()
 
-    for s in strategies:
-        sid = s.get("id", "?")
-        container = s.get("container_name", "?")
-        raw_status = s.get("status", "unknown")
-        instance = (s.get("instance_id") or "")[:8] or "—"
-        registered_at = s.get("registered_at") or "—"
+    # ── Polling ───────────────────────────────────────────────────────────────
 
-        if raw_status == "running":
-            status_text = Text("● running", style="green")
-        elif raw_status == "stopped":
-            status_text = Text("○ stopped", style="yellow")
-        elif raw_status == "not_started":
-            status_text = Text("— not started", style="dim")
+    async def _poll_overview(self) -> None:
+        try:
+            async with httpx.AsyncClient(base_url=self._base_url, timeout=3.0) as client:
+                sr = await client.get("/strategies")
+                sr.raise_for_status()
+                rr = await client.get("/risk")
+                rr.raise_for_status()
+                self._strategies = sr.json()
+                self._risk = rr.json()
+        except Exception:
+            pass
+        self._render_header()
+        self._render_strategy_list()
+
+    async def _poll_state(self) -> None:
+        s = self._selected_strategy()
+        if not s:
+            self._render_detail(None)
+            return
+        try:
+            async with httpx.AsyncClient(base_url=self._base_url, timeout=3.0) as client:
+                resp = await client.get(f"/strategies/{s['id']}/state")
+                if resp.status_code == 200:
+                    self._strategy_state = resp.json()
+                    self._state_avail = True
+                else:
+                    self._strategy_state = {}
+                    self._state_avail = False
+        except Exception:
+            self._strategy_state = {}
+            self._state_avail = False
+        self._render_detail(s)
+
+    # ── Rendering ─────────────────────────────────────────────────────────────
+
+    def _render_header(self) -> None:
+        now = datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
+        txt = Text()
+        if not self._risk:
+            txt.append("  Multi-Strategy Monitor  ", style="bold white on navy_blue")
+            txt.append(f"  {self._base_url}  ", style="dim")
+            txt.append(f"  {now}  ", style="dim")
         else:
-            status_text = Text(f"? {raw_status}", style="red")
+            notional = self._risk.get("global_notional_usd", 0.0)
+            ceiling = self._risk.get("global_ceiling_usd", 0.0)
+            util = (notional / ceiling * 100) if ceiling else 0.0
+            util_color = "green" if util < 70 else "yellow" if util < 90 else "red"
+            txt.append("  Multi-Strategy Monitor  ", style="bold white on navy_blue")
+            txt.append(f"  {self._base_url}  ", style="dim")
+            txt.append(f"  Global: ${notional:,.0f} / ${ceiling:,.0f}  ", style="white")
+            txt.append(f"({util:.1f}%)  ", style=f"bold {util_color}")
+            txt.append(f"  {now}  ", style="dim")
+        self.query_one("#top-bar", Static).update(txt)
 
-        sr = per_strategy_risk.get(sid, {})
-        notional = sr.get("notional_usd", 0.0)
-        max_usd = sr.get("max_position_usd", 0.0)
-        util = (notional / max_usd * 100) if max_usd else 0.0
-        util_color = "green" if util < 70 else "yellow" if util < 90 else "red"
-        cb_open = sr.get("circuit_breaker_open", False)
-        cb_text = Text("OPEN", style="bold red") if cb_open else Text("closed", style="dim green")
+    def _render_strategy_list(self) -> None:
+        lines = Text()
+        for i, s in enumerate(self._strategies):
+            is_sel = (i == self._selected_index)
+            status = s.get("status", "stopped")
+            registered = s.get("registered", False)
+            sid = s.get("id", "?")
 
-        strat_table.add_row(
-            sid,
-            container,
-            status_text,
-            instance,
-            f"${notional:,.2f}",
-            f"${max_usd:,.2f}" if max_usd else "—",
-            f"[{util_color}]{util:.1f}%[/{util_color}]" if max_usd else "—",
-            cb_text,
-            registered_at,
+            if status == "running" and registered:
+                dot, dot_style = "●", "bold green"
+            elif status == "running":
+                dot, dot_style = "●", "bold yellow"
+            else:
+                dot, dot_style = "○", "dim white"
+
+            cursor = "▶ " if is_sel else "  "
+            name_style = "bold white on blue" if is_sel else "white"
+            lines.append(cursor, style="bold cyan" if is_sel else "dim")
+            lines.append(f"{dot} ", style=dot_style)
+            lines.append(f"{sid}\n", style=name_style)
+
+        if not self._strategies:
+            lines.append("  No strategies found\n", style="dim")
+
+        panel = Panel(lines, title="Strategies", border_style="bright_blue")
+        self.query_one("#strategy-list-pane", Static).update(panel)
+
+    def _render_detail(self, strategy: dict | None) -> None:
+        if strategy is None:
+            panel = Panel(
+                Text("No strategy selected", style="dim"),
+                title="Detail",
+                border_style="dim",
+            )
+            self.query_one("#detail-pane", Static).update(panel)
+            return
+
+        sid = strategy.get("id", "?")
+        content = (
+            self._build_state_detail(self._strategy_state)
+            if self._state_avail and self._strategy_state
+            else self._build_generic_detail(strategy)
+        )
+        panel = Panel(content, title=f"[bold]{sid}[/bold]", border_style="bright_blue")
+        self.query_one("#detail-pane", Static).update(panel)
+
+    def _build_state_detail(self, state: dict):
+        """Two-column detail: Account/Position + Features/Signal."""
+        pos = state.get("position", {})
+        left = Table(show_header=False, box=None, padding=(0, 1))
+        left.add_column("k", style="dim", width=16)
+        left.add_column("v", justify="right")
+
+        balance = state.get("balance", 0.0)
+        left.add_row("Balance", f"[bold white]${balance:,.2f}[/bold white]")
+        left.add_row("Trades", str(state.get("trade_count", 0)))
+        commission = state.get("total_commission", 0.0)
+        left.add_row("Commission", f"[red]-${commission:,.4f}[/red]")
+
+        if pos:
+            side = pos.get("side", "?")
+            sc = "green" if side == "BUY" else "red"
+            left.add_row("", "")
+            left.add_row("Side", f"[bold {sc}]{side}[/bold {sc}]")
+            left.add_row("Qty", f"{pos.get('qty', 0.0):.5f}")
+            left.add_row("Avg entry", f"${pos.get('avg_px', 0.0):,.2f}")
+            unreal = pos.get("unrealized_pnl", 0.0)
+            real = pos.get("realized_pnl", 0.0)
+            left.add_row("Unreal PnL", str(_signed(unreal, 4, " USDC")))
+            left.add_row("Real PnL", str(_signed(real, 4, " USDC")))
+            left.add_row("Duration", f"{pos.get('duration_s', 0.0):.0f}s")
+        else:
+            left.add_row("", "")
+            left.add_row("Position", "[dim]flat[/dim]")
+
+        left_panel = Panel(left, title="Account / Position", border_style="blue")
+
+        feats = state.get("features", {})
+        right = Table(show_header=True, box=None, padding=(0, 1))
+        right.add_column("Feature", style="dim", width=12)
+        right.add_column("Value", justify="right", width=12)
+        right.add_column("Bar", width=18)
+
+        def _feat_row(name: str, val: float, lo: float = -1.0, hi: float = 1.0, prec: int = 4):
+            c = "green" if val >= 0 else "red"
+            right.add_row(name, f"[{c}]{val:+.{prec}f}[/{c}]", _ascii_bar(val, lo, hi))
+
+        _feat_row("OBI", feats.get("obi", 0.0))
+        _feat_row("TFI", feats.get("tfi", 0.0))
+        _feat_row("MP drift", feats.get("mp_drift", 0.0), -0.001, 0.001, 8)
+        _feat_row("Hawkes", feats.get("hawkes", 0.0), 0.0, 1.0)
+        _feat_row("Cascade", feats.get("cascade", 0.0), 0.0, 2.0)
+        _feat_row("Funding", feats.get("funding", 0.0))
+        _feat_row("Spread", feats.get("spread", 0.0), 0.0, 0.01, 6)
+        _feat_row("Vol short", feats.get("vol_short", 0.0), 0.0, 0.01, 6)
+
+        edge = state.get("last_edge", 0.0)
+        right.add_row("", "", "")
+        ec = "green" if edge >= 0 else "red"
+        right.add_row("Last edge", f"[bold {ec}]{edge:+.4f}[/bold {ec}]", "")
+        active = state.get("active_order")
+        right.add_row(
+            "Active order",
+            "[yellow]YES[/yellow]" if active else "[dim]none[/dim]",
+            "",
         )
 
-    if not strategies:
-        strat_table.add_row("[dim]No strategies registered[/dim]", *[""] * 8)
+        right_panel = Panel(right, title="Features & Signal", border_style="blue")
+        return Columns([left_panel, right_panel])
 
-    layout["body"].update(Panel(strat_table, title="Strategies", border_style="bright_blue"))
+    def _build_generic_detail(self, strategy: dict):
+        """Generic detail panel shown when no state has been pushed."""
+        t = Table(show_header=False, box=None, padding=(0, 1))
+        t.add_column("k", style="dim", width=18)
+        t.add_column("v")
+        t.add_row("ID", f"[bold cyan]{strategy.get('id', '?')}[/bold cyan]")
+        t.add_row("Status", strategy.get("status", "?"))
+        instance = strategy.get("instance_id") or "—"
+        t.add_row("Instance", instance[:16])
+        t.add_row("Container", strategy.get("container_name", "?"))
+        t.add_row("Class", strategy.get("class", "?"))
+        registered = strategy.get("registered", False)
+        t.add_row("Registered", "[green]Yes[/green]" if registered else "[dim]No[/dim]")
+        max_usd = strategy.get("risk_limit_usd", 0.0)
+        t.add_row("Risk limit", f"${max_usd:,.0f}" if max_usd else "—")
+        t.add_row("", "")
+        t.add_row("State", "[dim]No state pushed yet[/dim]")
+        return t
 
-    # ── Footer: help text ─────────────────────────────────────────────
-    help_text = Text()
-    help_text.append("  Commands: ", style="dim")
-    help_text.append("hl start <id>", style="cyan")
-    help_text.append("  ", style="")
-    help_text.append("hl stop <id>", style="cyan")
-    help_text.append("  ", style="")
-    help_text.append("hl logs <id>", style="cyan")
-    help_text.append("  ", style="")
-    help_text.append("hl risk", style="cyan")
-    help_text.append("    Press [Ctrl+C] to exit", style="dim")
-    layout["footer"].update(Panel(help_text, title="Controls", border_style="dim"))
+    def _render_footer(self) -> None:
+        txt = Text()
+        txt.append("  ↑↓", style="bold cyan")
+        txt.append(" navigate  ", style="dim")
+        txt.append("s", style="bold cyan")
+        txt.append(" start  ", style="dim")
+        txt.append("x", style="bold cyan")
+        txt.append(" stop  ", style="dim")
+        txt.append("q / Ctrl+C", style="bold cyan")
+        txt.append(" quit", style="dim")
+        self.query_one("#bottom-bar", Static).update(txt)
 
-    return layout
+    # ── Actions ───────────────────────────────────────────────────────────────
 
+    def _selected_strategy(self) -> dict | None:
+        if not self._strategies:
+            return None
+        idx = max(0, min(self._selected_index, len(self._strategies) - 1))
+        return self._strategies[idx]
+
+    def action_cursor_up(self) -> None:
+        if self._strategies and self._selected_index > 0:
+            self._selected_index -= 1
+            self._render_strategy_list()
+
+    def action_cursor_down(self) -> None:
+        if self._strategies and self._selected_index < len(self._strategies) - 1:
+            self._selected_index += 1
+            self._render_strategy_list()
+
+    async def action_start_strategy(self) -> None:
+        s = self._selected_strategy()
+        if s:
+            try:
+                async with httpx.AsyncClient(base_url=self._base_url, timeout=5.0) as client:
+                    await client.post(f"/strategies/{s['id']}/start")
+            except Exception:
+                pass
+
+    async def action_stop_strategy(self) -> None:
+        s = self._selected_strategy()
+        if s:
+            try:
+                async with httpx.AsyncClient(base_url=self._base_url, timeout=5.0) as client:
+                    await client.post(f"/strategies/{s['id']}/stop")
+            except Exception:
+                pass
+
+
+# ── Entry point ───────────────────────────────────────────────────────────────
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="APEX Strategy Live Monitor")
@@ -335,7 +546,7 @@ def main() -> None:
     parser.add_argument(
         "--multi",
         action="store_true",
-        help="Multi-strategy mode: read from orchestrator REST API",
+        help="Multi-strategy mode: Textual TUI reading from orchestrator REST API",
     )
     parser.add_argument(
         "--url",
@@ -344,20 +555,11 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    console = Console()
-    refresh_interval = 1.0 / max(0.1, args.refresh)
-
     if args.multi:
-        with Live(console=console, refresh_per_second=args.refresh, screen=True) as live:
-            try:
-                while True:
-                    strategies, risk_data, err = _fetch_multi_state(args.url)
-                    layout = build_multi_dashboard(strategies, risk_data, args.url, err)
-                    live.update(layout)
-                    time.sleep(refresh_interval)
-            except KeyboardInterrupt:
-                pass
+        OrchestratorApp(base_url=args.url).run()
     else:
+        console = Console()
+        refresh_interval = 1.0 / max(0.1, args.refresh)
         with Live(console=console, refresh_per_second=args.refresh, screen=True) as live:
             try:
                 while True:
