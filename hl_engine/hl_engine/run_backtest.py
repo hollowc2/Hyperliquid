@@ -54,6 +54,76 @@ def _catalog_has(catalog: ParquetDataCatalog, data_cls, instrument_id: Instrumen
         return False
 
 
+def _ob_parquet_files(catalog_path: Path, instrument_id: str) -> list[Path]:
+    """Return OB delta Parquet files sorted chronologically."""
+    ob_dir = catalog_path / "data" / "order_book_deltas" / instrument_id
+    if not ob_dir.exists():
+        return []
+    return sorted(ob_dir.glob("*.parquet"))
+
+
+def _add_ob_data_chunked(
+    catalog_path: Path,
+    instrument_id: InstrumentId,
+    start_ns: int,
+    end_ns: int,
+    engine: "BacktestEngine",
+) -> int:
+    """
+    Load OB deltas from Parquet one row-group at a time and add to the engine
+    immediately. This keeps peak memory to ~one row-group instead of the entire
+    day's worth of deltas held simultaneously in Arrow + NT object form.
+    """
+    import gc
+    import pyarrow.compute as pc
+    from nautilus_trader.serialization.arrow.serializer import ArrowSerializer
+
+    files = _ob_parquet_files(catalog_path, instrument_id.value)
+    total = 0
+    for f in files:
+        pf = pq.ParquetFile(f)
+        for rg_idx in range(pf.metadata.num_row_groups):
+            rg_meta = pf.metadata.row_group(rg_idx)
+            rg_min = rg_max = None
+            for col_idx in range(rg_meta.num_columns):
+                col = rg_meta.column(col_idx)
+                if col.path_in_schema == "ts_event" and col.statistics is not None:
+                    rg_min = col.statistics.min
+                    rg_max = col.statistics.max
+                    break
+            if rg_min is None:
+                # No statistics — fall back to reading ts_event column
+                table = pf.read_row_group(rg_idx, columns=["ts_event"])
+                ts_arr = table.column("ts_event")
+                rg_min = pc.min(ts_arr).as_py()
+                rg_max = pc.max(ts_arr).as_py()
+                del table
+            if rg_max < start_ns or rg_min > end_ns:
+                continue
+
+            table = pf.read_row_group(rg_idx)
+            if rg_min < start_ns or rg_max > end_ns:
+                mask = pc.and_(
+                    pc.greater_equal(table.column("ts_event"), start_ns),
+                    pc.less_equal(table.column("ts_event"), end_ns),
+                )
+                table = table.filter(mask)
+            if len(table) == 0:
+                del table
+                continue
+
+            pyo3_deltas = ArrowSerializer.deserialize(data_cls=OrderBookDelta, batch=table)
+            del table
+            cython_deltas = OrderBookDelta.from_pyo3_list(pyo3_deltas)
+            del pyo3_deltas
+            engine.add_data(cython_deltas)
+            total += len(cython_deltas)
+            del cython_deltas
+            gc.collect()
+
+    return total
+
+
 def _bar_parquet_files(catalog_path: Path, instrument_id: str) -> list[Path]:
     """Return all 1-minute bar Parquet files sorted by filename (chronological)."""
     bar_dir = catalog_path / "data" / "bar" / f"{instrument_id}-1-MINUTE-LAST-EXTERNAL"
@@ -272,7 +342,7 @@ def main() -> None:
     catalog = ParquetDataCatalog(str(CATALOG_PATH))
     instrument_id = InstrumentId.from_str(INSTRUMENT_ID)
 
-    has_ob = args.with_ob and _catalog_has(catalog, OrderBookDelta, instrument_id)
+    has_ob = args.with_ob and len(_ob_parquet_files(CATALOG_PATH, INSTRUMENT_ID)) > 0
     has_trades = _catalog_has(catalog, TradeTick, instrument_id)
     has_bars = len(_bar_parquet_files(CATALOG_PATH, INSTRUMENT_ID)) > 0
 
@@ -324,12 +394,9 @@ def main() -> None:
 
     # --- Data ---
     if has_ob:
-        ob_data = catalog.order_book_deltas(
-            instrument_ids=[INSTRUMENT_ID],
-            start=start_ns,
-            end=end_ns,
-        )
-        engine.add_data(ob_data)
+        print("  Loading OB deltas (chunked by row-group)...")
+        ob_count = _add_ob_data_chunked(CATALOG_PATH, instrument_id, start_ns, end_ns, engine)
+        print(f"  OrderBookDelta : {ob_count:,} deltas loaded")
 
     if has_trades:
         trade_data = catalog.trade_ticks(
