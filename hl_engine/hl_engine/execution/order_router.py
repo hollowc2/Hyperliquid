@@ -121,6 +121,15 @@ class OrderRouter:
                 post_only=False,  # may cross the spread by one tick
             )
 
+    def route_no_book(self, is_buy: bool, is_cascade_mode: bool, ref_px: float = 0.0) -> OrderTypeDecision:
+        """MARKET IOC fallback used when no live order book is available."""
+        return OrderTypeDecision(
+            order_type=OrderType.MARKET,
+            price=None,
+            time_in_force=TimeInForce.IOC,
+            post_only=False,
+        )
+
     @staticmethod
     def _round_to_precision(value: float, precision: int) -> float:
         factor = 10 ** precision

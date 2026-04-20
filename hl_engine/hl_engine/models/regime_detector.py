@@ -67,8 +67,8 @@ class RegimeDetector:
         trend_strength : t-statistic from linear regression of log returns
         book_depth_usd : total bid + ask USD depth
         """
-        # Priority 1: liquidity
-        if book_depth_usd < self._min_liquidity_usd:
+        # Priority 1: liquidity (skipped when book_depth_usd is None — no live book)
+        if book_depth_usd is not None and book_depth_usd < self._min_liquidity_usd:
             self._state = RegimeState.LOW_LIQUIDITY
             return self._state
 

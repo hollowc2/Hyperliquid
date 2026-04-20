@@ -140,6 +140,7 @@ class ApexStrategy(Strategy):
         self._latest_hawkes: float = 0.0
         self._funding_pressure: float = 0.0
         self._price_momentum: float = 0.0
+        self._last_bar_close: float = 0.0  # fallback mid when no book
 
         # --- Monitoring state ---
         self._last_edge: float = 0.0
@@ -289,6 +290,24 @@ class ApexStrategy(Strategy):
         if o > 0.0 and c > 0.0:
             import math
             self._price_momentum = math.log(c / o)
+        if c > 0.0:
+            self._last_bar_close = c
+
+        # Fallback signal evaluation when no order book data is available.
+        # on_order_book_deltas won't fire without OB data in catalog, so bars
+        # serve as the evaluation clock (1m cadence, throttle still applies).
+        # Also triggers when book exists but has no quotes (empty, post-subscribe).
+        book = self.cache.order_book(self._instrument_id)
+        book_has_quotes = (
+            book is not None
+            and book.best_bid_price() is not None
+            and book.best_ask_price() is not None
+        )
+        if not book_has_quotes:
+            now = self.clock.timestamp_ns()
+            if (now - self._last_signal_ts) >= self._signal_throttle_ns:
+                self._maybe_evaluate_signal(None)
+                self._last_signal_ts = now
 
     def on_data(self, data) -> None:
         """Dispatch custom data types to the appropriate model."""
@@ -383,7 +402,8 @@ class ApexStrategy(Strategy):
             return
 
         # Toxicity filter — skip if recent trades are too toxic (adverse selection)
-        toxicity = self._trade_features.compute_toxicity_score(book)
+        # Requires a live book; skip filter (treat as 0) when book unavailable.
+        toxicity = self._trade_features.compute_toxicity_score(book) if book is not None else 0.0
         if toxicity > 0.002:  # 0.2% toxicity threshold
             return
 
@@ -399,7 +419,7 @@ class ApexStrategy(Strategy):
             vol_short=vol_short,
             vol_long=vol_long,
             trend_strength=trend_str,
-            book_depth_usd=self._latest_book_depth,
+            book_depth_usd=self._latest_book_depth if book is not None else None,
         )
 
         # Skip untradeable regimes unless in cascade mode
@@ -454,25 +474,26 @@ class ApexStrategy(Strategy):
             if bal is not None:
                 portfolio_value = float(bal.as_double())
 
+        # Reference price: use book mid when available, fall back to last bar close.
+        if book is not None:
+            best_bid = book.best_bid_price()
+            best_ask = book.best_ask_price()
+            if best_bid is None or best_ask is None:
+                return
+            ref_px = (float(best_bid) + float(best_ask)) / 2.0
+        else:
+            ref_px = self._last_bar_close
+        if ref_px == 0.0:
+            return
+
         # Current position for inventory penalty
         open_positions = self.cache.positions_open(instrument_id=self._instrument_id)
         position = open_positions[0] if open_positions else None
         current_position_usd = 0.0
         if position:
-            best_bid = book.best_bid_price()
-            mid = float(best_bid) if best_bid else 0.0
-            current_position_usd = float(position.quantity) * mid * (
+            current_position_usd = float(position.quantity) * ref_px * (
                 1 if position.is_long else -1
             )
-
-        # Reference price for sizing
-        best_bid = book.best_bid_price()
-        best_ask = book.best_ask_price()
-        if best_bid is None or best_ask is None:
-            return
-        ref_px = (float(best_bid) + float(best_ask)) / 2.0
-        if ref_px == 0.0:
-            return
 
         size = self._kelly_sizer.compute_position_size(
             f_kelly=f_kelly,
@@ -511,15 +532,22 @@ class ApexStrategy(Strategy):
         seeded_notional = max(abs(current_position_usd), self._exposure_manager.tracked_notional)
         self._exposure_manager.update_notional(seeded_notional + order_notional)
 
-        # Route the order
-        decision = self._order_router.route(
-            book=book,
-            instrument=self._instrument,
-            quantity=size,
-            is_buy=is_buy,
-            is_cascade_mode=cascade_mode,
-            slippage_model=self._slippage_model,
-        )
+        # Route the order. Without a live book, use MARKET IOC directly.
+        if book is not None:
+            decision = self._order_router.route(
+                book=book,
+                instrument=self._instrument,
+                quantity=size,
+                is_buy=is_buy,
+                is_cascade_mode=cascade_mode,
+                slippage_model=self._slippage_model,
+            )
+        else:
+            decision = self._order_router.route_no_book(
+                is_buy=is_buy,
+                is_cascade_mode=cascade_mode,
+                ref_px=ref_px,
+            )
 
         # Build and submit the NautilusTrader order
         order_side = OrderSide.BUY if is_buy else OrderSide.SELL

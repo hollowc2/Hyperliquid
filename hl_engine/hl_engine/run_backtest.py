@@ -62,53 +62,23 @@ def _bar_parquet_files(catalog_path: Path, instrument_id: str) -> list[Path]:
     return sorted(bar_dir.glob("*.parquet"))
 
 
-def _load_bars_direct(catalog_path: Path, instrument_id_str: str, start_ns: int, end_ns: int) -> list[Bar]:
+def _load_bars_direct(catalog: "ParquetDataCatalog", instrument_id_str: str, start_ns: int, end_ns: int) -> list[Bar]:
     """
-    Load 1-minute bars directly from Parquet, bypassing the NT catalog query
-    (which fails when bar files have conflicting price_precision metadata from
-    historical loader vs live recorder writing at different inferred precisions).
+    Load 1-minute bars via the NT catalog, then deduplicate by ts_event.
+    Dedup is needed because the catalog accumulates duplicate rows from repeated
+    flush cycles before compaction.
     """
-    files = _bar_parquet_files(catalog_path, instrument_id_str)
-    if not files:
+    bar_type_str = f"{instrument_id_str}-1-MINUTE-LAST-EXTERNAL"
+    try:
+        bars: list[Bar] = catalog.bars([bar_type_str], start=start_ns, end=end_ns)
+    except Exception:
         return []
 
-    instrument_id = InstrumentId.from_str(instrument_id_str)
-    bars: list[Bar] = []
-
-    for f in files:
-        tbl = pq.read_table(f)
-        meta = tbl.schema.metadata or {}
-        pp = int(meta.get(b"price_precision", b"2"))
-        sp = int(meta.get(b"size_precision", b"2"))
-
-        bar_type = BarType(
-            instrument_id=instrument_id,
-            bar_spec=BarSpecification(1, BarAggregation.MINUTE, PriceType.LAST),
-            aggregation_source=AggregationSource.EXTERNAL,
-        )
-
-        rows = tbl.to_pydict()
-        for i in range(tbl.num_rows):
-            ts = rows["ts_event"][i]
-            if ts < start_ns or ts > end_ns:
-                continue
-            try:
-                o = Price.from_raw(struct.unpack_from("<q", rows["open"][i])[0], pp)
-                h = Price.from_raw(struct.unpack_from("<q", rows["high"][i])[0], pp)
-                l = Price.from_raw(struct.unpack_from("<q", rows["low"][i])[0], pp)
-                c = Price.from_raw(struct.unpack_from("<q", rows["close"][i])[0], pp)
-                v = Quantity.from_raw(struct.unpack_from("<Q", rows["volume"][i])[0], sp)
-                bars.append(Bar(
-                    bar_type=bar_type,
-                    open=o, high=h, low=l, close=c, volume=v,
-                    ts_event=ts,
-                    ts_init=rows["ts_init"][i],
-                ))
-            except (ValueError, OverflowError):
-                pass  # skip mid-candle snapshots with invalid OHLC
-
-    bars.sort(key=lambda b: b.ts_event)
-    return bars
+    # Deduplicate: keep the last bar written for each ts_event.
+    seen: dict[int, Bar] = {}
+    for b in bars:
+        seen[b.ts_event] = b
+    return sorted(seen.values(), key=lambda b: b.ts_event)
 
 
 def _load_custom_data(
@@ -344,7 +314,7 @@ def main() -> None:
         base_currency=USDC,
         starting_balances=[Money(STARTING_BALANCE_USDC, USDC)],
         book_type=BookType.L2_MBP if has_ob else BookType.L1_MBP,
-        default_leverage=Decimal("1"),
+        default_leverage=Decimal("20"),  # HL BTC default; affects margin math not risk limits
     )
 
     # --- Instruments ---
@@ -369,8 +339,8 @@ def main() -> None:
         )
         engine.add_data(trade_data)
 
-    bar_data_1m = _load_bars_direct(CATALOG_PATH, INSTRUMENT_ID, start_ns, end_ns)
-    print(f"  Bars (1m)      : {len(bar_data_1m)} bars loaded directly from Parquet")
+    bar_data_1m = _load_bars_direct(catalog, INSTRUMENT_ID, start_ns, end_ns)
+    print(f"  Bars (1m)      : {len(bar_data_1m)} bars loaded")
 
     # For the MA strategy with bar_minutes > 1, resample before adding to engine
     bar_minutes = args.bar_minutes if args.strategy == "ma" else 1
