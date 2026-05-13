@@ -309,9 +309,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="APEX Trader backtest runner")
     parser.add_argument(
         "--strategy",
-        choices=["apex", "ma"],
+        choices=["apex", "ma", "climax"],
         default="apex",
-        help="Strategy to run: 'apex' (full ApexStrategy) or 'ma' (MA crossover smoke test)",
+        help=(
+            "Strategy to run: 'apex' (full ApexStrategy), "
+            "'ma' (MA crossover smoke test), or 'climax' (V-climax breakout)"
+        ),
     )
     parser.add_argument(
         "--start",
@@ -409,7 +412,8 @@ def main() -> None:
     bar_data_1m = _load_bars_direct(catalog, INSTRUMENT_ID, start_ns, end_ns)
     print(f"  Bars (1m)      : {len(bar_data_1m)} bars loaded")
 
-    # For the MA strategy with bar_minutes > 1, resample before adding to engine
+    # For the MA strategy with bar_minutes > 1, resample before adding to engine.
+    # The climax strategy consumes 1m bars and aggregates internally.
     bar_minutes = args.bar_minutes if args.strategy == "ma" else 1
     if bar_minutes > 1:
         inst = catalog.instruments(instrument_ids=[INSTRUMENT_ID])[0]
@@ -436,6 +440,12 @@ def main() -> None:
         strategy = MaCrossStrategy(config=MaCrossConfig(
             instrument_id=INSTRUMENT_ID,
             bar_minutes=bar_minutes,
+        ))
+    elif args.strategy == "climax":
+        from hl_engine.config.apex_climax_config import ApexClimaxConfig
+        from hl_engine.strategy.apex_climax_strategy import ApexClimaxStrategy
+        strategy = ApexClimaxStrategy(config=ApexClimaxConfig(
+            instrument_id=INSTRUMENT_ID,
         ))
     else:
         # Build minimal ApexConfig (no real credentials needed for backtesting)
