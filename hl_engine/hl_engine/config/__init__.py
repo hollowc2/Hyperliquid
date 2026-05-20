@@ -7,6 +7,7 @@ from hl_engine.config.apex_config import (
     ApexConfig,
     ApexStrategyConfig,
 )
+from hl_engine.config.v_climax_reversal_config import VClimaxReversalConfig
 
 __all__ = [
     "HyperliquidConfig",
@@ -16,4 +17,5 @@ __all__ = [
     "ExecutionConfig",
     "ApexConfig",
     "ApexStrategyConfig",
+    "VClimaxReversalConfig",
 ]

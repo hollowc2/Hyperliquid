@@ -1,4 +1,4 @@
 from hl_engine.strategy.apex_strategy import ApexStrategy
-from hl_engine.strategy.apex_climax_strategy import ApexClimaxStrategy
+from hl_engine.strategy.v_climax_reversal_strategy import VClimaxReversalStrategy
 
-__all__ = ["ApexStrategy", "ApexClimaxStrategy"]
+__all__ = ["ApexStrategy", "VClimaxReversalStrategy"]

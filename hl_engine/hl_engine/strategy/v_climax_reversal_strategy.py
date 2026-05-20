@@ -1,4 +1,4 @@
-"""V-climax exhaustion breakout strategy for Hyperliquid perpetuals."""
+"""V-climax reversal strategy for Hyperliquid perpetuals."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from nautilus_trader.model.instruments import Instrument
 from nautilus_trader.model.objects import Quantity
 from nautilus_trader.trading.strategy import Strategy
 
-from hl_engine.config.apex_climax_config import ApexClimaxConfig
+from hl_engine.config.v_climax_reversal_config import VClimaxReversalConfig
 
 
 class ClimaxPhase(Enum):
@@ -54,15 +54,15 @@ class ClimaxEvent:
     expires_after_bar_count: int
 
 
-class ApexClimaxStrategy(Strategy):
+class VClimaxReversalStrategy(Strategy):
     """
-    Long-only waterfall + volume climax breakout strategy.
+    Long-only waterfall + volume climax reversal strategy.
 
     The strategy subscribes to 1-minute bars, aggregates closed 2-minute bars
     internally, and uses L2 book updates for live entry/exit triggers.
     """
 
-    def __init__(self, config: ApexClimaxConfig) -> None:
+    def __init__(self, config: VClimaxReversalConfig) -> None:
         super().__init__(config=config)
         self._config = config
         self._instrument_id: Optional[InstrumentId] = None
@@ -110,14 +110,14 @@ class ApexClimaxStrategy(Strategy):
         )
 
         self.log.info(
-            "ApexClimaxStrategy started | "
+            "VClimaxReversalStrategy started | "
             f"instrument={self._instrument_id} bar_minutes={self._config.bar_minutes}"
         )
 
     def on_stop(self) -> None:
         if self._instrument_id:
             self.cancel_all_orders(self._instrument_id)
-        self.log.info("ApexClimaxStrategy stopped")
+        self.log.info("VClimaxReversalStrategy stopped")
 
     # ------------------------------------------------------------------
     # Data handlers
@@ -288,7 +288,7 @@ class ApexClimaxStrategy(Strategy):
         self._active_entry_order_id = order.client_order_id
         self._phase = ClimaxPhase.ENTERING
         self.submit_order(order)
-        self.log.info(f"Submitted climax BUY qty={qty} ask={ask_price:.2f}")
+        self.log.info(f"Submitted v-climax BUY qty={qty} ask={ask_price:.2f}")
 
     def _maybe_activate_trailing(self, mark_price: float) -> None:
         if self._phase != ClimaxPhase.IN_POSITION_PHASE_1 or self._entry_price is None:
@@ -319,7 +319,7 @@ class ApexClimaxStrategy(Strategy):
         self._active_exit_order_id = order.client_order_id
         self._phase = ClimaxPhase.EXITING
         self.submit_order(order)
-        self.log.info(f"Submitted climax SELL stop={self._active_stop:.2f} px={bid_or_mark_price:.2f}")
+        self.log.info(f"Submitted v-climax SELL stop={self._active_stop:.2f} px={bid_or_mark_price:.2f}")
 
     def _compute_order_quantity(self, entry_price: float, stop_price: float) -> float:
         if self._instrument is None or entry_price <= stop_price:
@@ -342,7 +342,8 @@ class ApexClimaxStrategy(Strategy):
     def _position_quantity(self) -> float:
         if self._instrument_id is None:
             return 0.0
-        position = self.cache.position_for_instrument(self._instrument_id)
+        open_positions = self.cache.positions_open(instrument_id=self._instrument_id)
+        position = open_positions[0] if open_positions else None
         if position is None or not position.is_long:
             return 0.0
         return float(position.quantity)

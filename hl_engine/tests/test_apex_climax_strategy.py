@@ -1,9 +1,9 @@
 from collections import deque
 from types import SimpleNamespace
 
-from hl_engine.config.apex_climax_config import ApexClimaxConfig
-from hl_engine.strategy.apex_climax_strategy import (
-    ApexClimaxStrategy,
+from hl_engine.config.v_climax_reversal_config import VClimaxReversalConfig
+from hl_engine.strategy.v_climax_reversal_strategy import (
+    VClimaxReversalStrategy,
     ClimaxPhase,
     StrategyBar,
 )
@@ -21,14 +21,14 @@ def _bar(open_, high, low, close, volume=100.0, ts=0):
 
 
 def _strategy(config=None):
-    s = ApexClimaxStrategy.__new__(ApexClimaxStrategy)
-    s._config = config or ApexClimaxConfig()
+    s = VClimaxReversalStrategy.__new__(VClimaxReversalStrategy)
+    s._config = config or VClimaxReversalConfig()
     s._bars = deque(maxlen=32)
     return s
 
 
 def test_aggregates_two_one_minute_bars():
-    config = ApexClimaxConfig(bar_minutes=2, source_bar_minutes=1)
+    config = VClimaxReversalConfig(bar_minutes=2, source_bar_minutes=1)
     s = _strategy(config)
     s._source_bucket = []
 
@@ -56,7 +56,7 @@ def test_aggregates_two_one_minute_bars():
 
 
 def test_detects_climax_with_current_window_low_and_prior_volume_sma():
-    config = ApexClimaxConfig(
+    config = VClimaxReversalConfig(
         lookback_bars=10,
         atr_period=10,
         waterfall_drop_pct=0.02,
@@ -75,7 +75,7 @@ def test_detects_climax_with_current_window_low_and_prior_volume_sma():
 
 
 def test_rejects_waterfall_when_current_bar_is_not_window_low():
-    config = ApexClimaxConfig(lookback_bars=10, atr_period=10)
+    config = VClimaxReversalConfig(lookback_bars=10, atr_period=10)
     s = _strategy(config)
     bars = [_bar(100, 105, 95, 100, 100, i) for i in range(10)]
     bars.append(_bar(100, 103, 96, 102, 300, 10))
@@ -85,7 +85,7 @@ def test_rejects_waterfall_when_current_bar_is_not_window_low():
 
 
 def test_initial_stop_enforces_minimum_distance_from_entry_reference():
-    stop = ApexClimaxStrategy._initial_stop(
+    stop = VClimaxReversalStrategy._initial_stop(
         entry_ref=100.0,
         climax_low=99.95,
         atr=0.01,
@@ -97,8 +97,8 @@ def test_initial_stop_enforces_minimum_distance_from_entry_reference():
 
 
 def test_phase_2_requires_net_profit_after_round_trip_fees():
-    assert not ApexClimaxStrategy._is_net_profitable(100.09, 100.0, 0.001)
-    assert ApexClimaxStrategy._is_net_profitable(100.10, 100.0, 0.001)
+    assert not VClimaxReversalStrategy._is_net_profitable(100.09, 100.0, 0.001)
+    assert VClimaxReversalStrategy._is_net_profitable(100.10, 100.0, 0.001)
 
 
 def test_trailing_stop_only_ratchets_up():
@@ -113,7 +113,7 @@ def test_trailing_stop_only_ratchets_up():
 
 
 def test_pending_entry_expires_after_ttl_completed_bars():
-    config = ApexClimaxConfig(pending_entry_ttl_bars=1)
+    config = VClimaxReversalConfig(pending_entry_ttl_bars=1)
     s = _strategy(config)
     s._phase = ClimaxPhase.PENDING_ENTRY
     s._bars_since_climax = 1
@@ -132,5 +132,5 @@ def test_round_quantity_down_respects_increment_and_minimum():
         min_quantity=0.001,
     )
 
-    assert ApexClimaxStrategy._round_quantity_down(0.0129, instrument) == 0.012
-    assert ApexClimaxStrategy._round_quantity_down(0.0009, instrument) == 0.0
+    assert VClimaxReversalStrategy._round_quantity_down(0.0129, instrument) == 0.012
+    assert VClimaxReversalStrategy._round_quantity_down(0.0009, instrument) == 0.0

@@ -1,10 +1,10 @@
-"""Config for the V-climax exhaustion breakout strategy."""
+"""Config for the V-climax reversal strategy."""
 
 from nautilus_trader.config import StrategyConfig
 
 
-class ApexClimaxConfig(StrategyConfig):
-    """Nautilus-compatible config for ApexClimaxStrategy."""
+class VClimaxReversalConfig(StrategyConfig):
+    """Nautilus-compatible config for VClimaxReversalStrategy."""
 
     instrument_id: str = "BTC-USD.HYPERLIQUID"
 

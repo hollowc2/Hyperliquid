@@ -21,6 +21,7 @@ Usage:
 import argparse
 import os
 import struct
+import sys
 from decimal import Decimal
 from pathlib import Path
 
@@ -304,16 +305,19 @@ def _catalog_date_range(catalog_path: Path, instrument_id: str) -> tuple[str, st
 
 
 def main() -> None:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(line_buffering=True)
+
     default_start, default_end = _catalog_date_range(CATALOG_PATH, INSTRUMENT_ID)
 
     parser = argparse.ArgumentParser(description="APEX Trader backtest runner")
     parser.add_argument(
         "--strategy",
-        choices=["apex", "ma", "climax"],
+        choices=["apex", "ma", "vclimax"],
         default="apex",
         help=(
             "Strategy to run: 'apex' (full ApexStrategy), "
-            "'ma' (MA crossover smoke test), or 'climax' (V-climax breakout)"
+            "'ma' (MA crossover smoke test), or 'vclimax' (V-climax reversal)"
         ),
     )
     parser.add_argument(
@@ -340,13 +344,28 @@ def main() -> None:
         help="Load L2 order book data (enables OBI/microprice features). "
              "Uses ~4-8 GB RAM per week of data — limit date range accordingly.",
     )
+    parser.add_argument(
+        "--vclimax-waterfall-drop-pct",
+        type=float,
+        default=None,
+        help="Override v-climax waterfall drop threshold, e.g. 0.01 for 1%.",
+    )
+    parser.add_argument(
+        "--vclimax-volume-multiple",
+        type=float,
+        default=None,
+        help="Override v-climax volume multiple threshold.",
+    )
     args = parser.parse_args()
 
     catalog = ParquetDataCatalog(str(CATALOG_PATH))
     instrument_id = InstrumentId.from_str(INSTRUMENT_ID)
 
-    has_ob = args.with_ob and len(_ob_parquet_files(CATALOG_PATH, INSTRUMENT_ID)) > 0
-    has_trades = _catalog_has(catalog, TradeTick, instrument_id)
+    needs_apex_data = args.strategy == "apex"
+    needs_ob_data = args.strategy in {"apex", "vclimax"}
+
+    has_ob = needs_ob_data and args.with_ob and len(_ob_parquet_files(CATALOG_PATH, INSTRUMENT_ID)) > 0
+    has_trades = needs_apex_data and _catalog_has(catalog, TradeTick, instrument_id)
     has_bars = len(_bar_parquet_files(CATALOG_PATH, INSTRUMENT_ID)) > 0
 
     start_ns = _parse_ts(args.start)
@@ -357,9 +376,14 @@ def main() -> None:
     # Funding and OI are loaded without a lower time bound so that historical
     # records written by build_historical_catalog.py pre-seed the FundingModel
     # before the first bar arrives (warmup). Liquidations are backtest-window only.
-    funding_rows = _load_custom_data(CATALOG_PATH, "funding_rate", INSTRUMENT_ID, 0, end_ns)
-    oi_rows = _load_custom_data(CATALOG_PATH, "open_interest", INSTRUMENT_ID, 0, end_ns)
-    liq_rows = _load_custom_data(CATALOG_PATH, "liquidations", INSTRUMENT_ID, start_ns, end_ns)
+    if needs_apex_data:
+        funding_rows = _load_custom_data(CATALOG_PATH, "funding_rate", INSTRUMENT_ID, 0, end_ns)
+        oi_rows = _load_custom_data(CATALOG_PATH, "open_interest", INSTRUMENT_ID, 0, end_ns)
+        liq_rows = _load_custom_data(CATALOG_PATH, "liquidations", INSTRUMENT_ID, start_ns, end_ns)
+    else:
+        funding_rows = []
+        oi_rows = []
+        liq_rows = []
 
     print(f"Catalog data available for {INSTRUMENT_ID}:")
     print(f"  OrderBookDelta : {'YES' if has_ob else 'NO  (OBI/microprice features will be 0)'}")
@@ -407,13 +431,17 @@ def main() -> None:
             start=start_ns,
             end=end_ns,
         )
-        engine.add_data(trade_data)
+        if trade_data:
+            engine.add_data(trade_data)
+            print(f"  TradeTick      : {len(trade_data)} ticks loaded")
+        else:
+            print("  TradeTick      : 0 ticks loaded for selected window")
 
     bar_data_1m = _load_bars_direct(catalog, INSTRUMENT_ID, start_ns, end_ns)
     print(f"  Bars (1m)      : {len(bar_data_1m)} bars loaded")
 
     # For the MA strategy with bar_minutes > 1, resample before adding to engine.
-    # The climax strategy consumes 1m bars and aggregates internally.
+    # The v-climax strategy consumes 1m bars and aggregates internally.
     bar_minutes = args.bar_minutes if args.strategy == "ma" else 1
     if bar_minutes > 1:
         inst = catalog.instruments(instrument_ids=[INSTRUMENT_ID])[0]
@@ -441,12 +469,16 @@ def main() -> None:
             instrument_id=INSTRUMENT_ID,
             bar_minutes=bar_minutes,
         ))
-    elif args.strategy == "climax":
-        from hl_engine.config.apex_climax_config import ApexClimaxConfig
-        from hl_engine.strategy.apex_climax_strategy import ApexClimaxStrategy
-        strategy = ApexClimaxStrategy(config=ApexClimaxConfig(
-            instrument_id=INSTRUMENT_ID,
-        ))
+    elif args.strategy == "vclimax":
+        from hl_engine.config.v_climax_reversal_config import VClimaxReversalConfig
+        from hl_engine.strategy.v_climax_reversal_strategy import VClimaxReversalStrategy
+
+        vclimax_kwargs = {"instrument_id": INSTRUMENT_ID}
+        if args.vclimax_waterfall_drop_pct is not None:
+            vclimax_kwargs["waterfall_drop_pct"] = args.vclimax_waterfall_drop_pct
+        if args.vclimax_volume_multiple is not None:
+            vclimax_kwargs["volume_multiple"] = args.vclimax_volume_multiple
+        strategy = VClimaxReversalStrategy(config=VClimaxReversalConfig(**vclimax_kwargs))
     else:
         # Build minimal ApexConfig (no real credentials needed for backtesting)
         apex_config = ApexConfig(
