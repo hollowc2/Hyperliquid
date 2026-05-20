@@ -51,7 +51,8 @@ def ts_to_date(ts_ns: int) -> date:
 
 
 def read_all(src_dir: Path) -> pa.Table | None:
-    files = sorted(src_dir.glob("*.parquet"))
+    # Sort by mtime so mixed naming (YYYY-MM-DD vs nanosecond timestamps) is handled correctly
+    files = sorted(src_dir.glob("*.parquet"), key=lambda p: p.stat().st_mtime)
     if not files:
         return None
     log.info(f"    reading {len(files)} files …")
@@ -121,7 +122,7 @@ def compact_ob_deltas(
     import re
     from collections import defaultdict
 
-    files = sorted(src_dir.glob("*.parquet"))
+    files = sorted(src_dir.glob("*.parquet"), key=lambda p: p.stat().st_mtime)
     if not files:
         log.info("    no OB delta files, skipping")
         return

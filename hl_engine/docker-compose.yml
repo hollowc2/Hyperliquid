@@ -35,7 +35,7 @@ services:
     networks:
       - hl-net
       - monitoring_net
-    restart: unless-stopped
+    restart: "no"
     logging:
       driver: "json-file"
       options:
@@ -66,7 +66,7 @@ services:
     network_mode: host           # reaches butterfly_timescaledb on 127.0.0.1:5432
     depends_on:
       - orchestrator
-    restart: unless-stopped
+    restart: "no"
     logging:
       driver: "json-file"
       options:
@@ -91,7 +91,7 @@ services:
       - hl-net                        # shares network with orchestrator for ZMQ
     depends_on:
       - orchestrator
-    restart: unless-stopped
+    restart: "no"
     logging:
       driver: "json-file"
       options:

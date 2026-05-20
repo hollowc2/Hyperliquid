@@ -45,6 +45,9 @@ HL_INFO_URL = HL_BASE_URL + HL_INFO_ENDPOINT
 # Hyperliquid candle API max: ~5000 bars per request
 _MAX_CANDLES_PER_REQUEST = 5000
 _ONE_MINUTE_MS = 60_000
+_REQUEST_RETRIES = 6
+_REQUEST_BACKOFF_BASE_SECS = 0.5
+_REQUEST_BACKOFF_MAX_SECS = 8.0
 
 
 class HistoricalDataLoader:
@@ -118,11 +121,12 @@ class HistoricalDataLoader:
 
     async def _load_instruments(self, coins: list[str]) -> None:
         async with aiohttp.ClientSession() as session:
-            async with session.post(
-                self._info_url, json={"type": "metaAndAssetCtxs"}
-            ) as resp:
-                resp.raise_for_status()
-                data = await resp.json()
+            data = await _post_json_with_retry(
+                session,
+                self._info_url,
+                {"type": "metaAndAssetCtxs"},
+                request_label="instrument metadata",
+            )
 
         universe = data[0].get("universe", [])
         asset_ctxs = data[1]
@@ -168,9 +172,12 @@ class HistoricalDataLoader:
                         "endTime": chunk_end,
                     },
                 }
-                async with session.post(self._info_url, json=payload) as resp:
-                    resp.raise_for_status()
-                    candles = await resp.json()
+                candles = await _post_json_with_retry(
+                    session,
+                    self._info_url,
+                    payload,
+                    request_label=f"{coin} candle snapshot",
+                )
 
                 if not candles:
                     chunk_start = chunk_end
@@ -209,9 +216,12 @@ class HistoricalDataLoader:
         }
 
         async with aiohttp.ClientSession() as session:
-            async with session.post(self._info_url, json=payload) as resp:
-                resp.raise_for_status()
-                records = await resp.json()
+            records = await _post_json_with_retry(
+                session,
+                self._info_url,
+                payload,
+                request_label=f"{coin} funding history",
+            )
 
         if not records:
             log.info(f"  {coin}: no funding history returned.")
@@ -311,3 +321,56 @@ def _parse_candle(data: dict, bar_type: BarType, instrument) -> Bar:
         ts_event=ts_event,
         ts_init=ts_event,
     )
+
+
+async def _post_json_with_retry(
+    session: aiohttp.ClientSession,
+    url: str,
+    payload: dict,
+    *,
+    request_label: str,
+) -> object:
+    """
+    POST JSON with bounded retry for transient rate limits / server errors.
+
+    Hyperliquid will occasionally return 429 when the public API is busy.
+    Retrying here keeps catalog builds from failing on the first throttled call.
+    """
+
+    for attempt in range(1, _REQUEST_RETRIES + 1):
+        async with session.post(url, json=payload) as resp:
+            if resp.status == 429 or 500 <= resp.status < 600:
+                if attempt >= _REQUEST_RETRIES:
+                    resp.raise_for_status()
+
+                delay = _request_backoff_seconds(resp, attempt)
+                log.warning(
+                    "%s request failed with HTTP %s on attempt %s/%s; retrying in %.1fs",
+                    request_label,
+                    resp.status,
+                    attempt,
+                    _REQUEST_RETRIES,
+                    delay,
+                )
+                await asyncio.sleep(delay)
+                continue
+
+            resp.raise_for_status()
+            return await resp.json()
+
+    raise RuntimeError(f"{request_label} request failed after {_REQUEST_RETRIES} attempts")
+
+
+def _request_backoff_seconds(resp: aiohttp.ClientResponse, attempt: int) -> float:
+    retry_after = resp.headers.get("Retry-After")
+    header_delay: float | None = None
+    if retry_after is not None:
+        try:
+            header_delay = float(retry_after)
+        except ValueError:
+            header_delay = None
+
+    backoff = min(_REQUEST_BACKOFF_MAX_SECS, _REQUEST_BACKOFF_BASE_SECS * (2 ** (attempt - 1)))
+    if header_delay is None:
+        return backoff
+    return max(backoff, header_delay)
