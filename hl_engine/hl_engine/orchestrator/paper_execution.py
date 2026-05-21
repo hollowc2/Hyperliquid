@@ -85,6 +85,7 @@ class PaperExecutionEngine:
             account = PaperAccount(**row)
             self._accounts[strategy_id] = account
             await self._risk_manager.set_notional(strategy_id, abs(account.position_qty * account.avg_price))
+            self._update_metrics(strategy_id, account, instrument_id="")
         log.info("PaperExecutionEngine restored %d accounts from DB", len(rows))
 
     def ensure_account(self, strategy_id: str, initial_balance: float) -> PaperAccount:
@@ -96,6 +97,7 @@ class PaperExecutionEngine:
             )
             self._accounts[strategy_id] = account
             self._save_account(strategy_id, account)
+            self._update_metrics(strategy_id, account, instrument_id="")
         return account
 
     def order_reduces_position(self, strategy_id: str, is_buy: bool, qty: float) -> bool:
@@ -199,9 +201,11 @@ class PaperExecutionEngine:
         )
         self._persistence.mark_order_filled(client_order_id)
         self._save_account(strategy_id, account)
+        self._update_metrics(strategy_id, account, instrument_id=instrument_id)
 
         await self._risk_manager.set_notional(strategy_id, abs(account.position_qty * fill_px))
         metrics.fills_total.labels(strategy=strategy_id, side="buy" if is_buy else "sell").inc()
+        metrics.commissions_paid.labels(strategy=strategy_id, currency="USDC").inc(fee)
 
         topic, payload = wrap_fill(strategy_id, paper_fill.fill_payload)
         await self._zmq_fills_pub.send_multipart([topic, payload])
@@ -216,6 +220,21 @@ class PaperExecutionEngine:
             account.position_qty,
         )
         return paper_fill
+
+    def _update_metrics(self, strategy_id: str, account: PaperAccount, instrument_id: str) -> None:
+        from hl_engine.orchestrator.app import update_strategy_account_metrics
+
+        unrealized = 0.0
+        update_strategy_account_metrics(
+            strategy_id,
+            currency="USDC",
+            instrument=instrument_id,
+            equity=account.balance + unrealized,
+            balance=account.balance,
+            realized_pnl=account.realized_pnl,
+            unrealized_pnl=unrealized,
+            net_exposure_qty=account.position_qty if instrument_id else None,
+        )
 
     def _save_account(self, strategy_id: str, account: PaperAccount) -> None:
         self._persistence.save_paper_account(

@@ -71,6 +71,7 @@ class DockerManager:
         instance_id = str(uuid.uuid4())
         env = {
             "STRATEGY_CONFIG": f"/strategies/{spec.id}.yml",
+            "STRATEGY_ID": spec.id,
             "ORCHESTRATOR_REST_URL": f"http://{self._orchestrator_host}:8000",
             "ORCHESTRATOR_ZMQ_DATA": f"tcp://{self._orchestrator_host}:5555",
             "ORCHESTRATOR_ZMQ_FILLS": f"tcp://{self._orchestrator_host}:5556",

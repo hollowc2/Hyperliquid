@@ -59,6 +59,10 @@ _metrics_initialized: set[str] = set()
 # Strategy state cache — dumb KV store, strategies POST here, monitor GETs here
 _strategy_states: dict[str, Any] = {}
 
+# Peak equity is process-local; paper accounts are restored from DB and then
+# re-establish the peak from the next account/state update.
+_peak_equity_by_strategy: dict[str, float] = {}
+
 
 def _strategy_initial_balance(strategy_id: str) -> float:
     spec = strategy_registry.get(strategy_id) if strategy_registry else None
@@ -80,6 +84,96 @@ def _top_of_book_fill_price(instrument_id: str, is_buy: bool) -> Optional[float]
     if not levels:
         return None
     return float(levels[0][0])
+
+
+def _update_drawdown(strategy_id: str, equity: float) -> None:
+    peak = max(_peak_equity_by_strategy.get(strategy_id, equity), equity)
+    _peak_equity_by_strategy[strategy_id] = peak
+    drawdown = 0.0 if peak <= 0.0 else 100.0 * (peak - equity) / peak
+    metrics.drawdown_pct.labels(strategy=strategy_id).set(drawdown)
+
+
+def update_strategy_account_metrics(
+    strategy_id: str,
+    *,
+    currency: str = "USDC",
+    instrument: str = "",
+    equity: Optional[float] = None,
+    balance: Optional[float] = None,
+    realized_pnl: Optional[float] = None,
+    unrealized_pnl: Optional[float] = None,
+    net_exposure_qty: Optional[float] = None,
+) -> None:
+    """Update generic strategy/account Prometheus gauges."""
+    if equity is not None:
+        metrics.account_equity.labels(strategy=strategy_id, currency=currency).set(equity)
+        _update_drawdown(strategy_id, equity)
+    if balance is not None:
+        metrics.account_balance.labels(strategy=strategy_id, currency=currency).set(balance)
+    if realized_pnl is not None:
+        metrics.realized_pnl.labels(strategy=strategy_id, currency=currency).set(realized_pnl)
+    if unrealized_pnl is not None:
+        metrics.unrealized_pnl.labels(strategy=strategy_id, currency=currency).set(unrealized_pnl)
+    if instrument and net_exposure_qty is not None:
+        metrics.net_exposure_qty.labels(strategy=strategy_id, instrument=instrument).set(net_exposure_qty)
+
+
+def _update_metrics_from_strategy_state(strategy_id: str, state: dict[str, Any]) -> None:
+    """Translate a pushed strategy state dict into Prometheus gauges."""
+    metrics.strategy_state.labels(strategy=strategy_id).set(1)
+
+    currency = str(state.get("currency") or "USDC")
+    instrument = str(state.get("instrument") or "")
+    position = state.get("position") or {}
+
+    equity = state.get("equity", state.get("balance"))
+    balance = state.get("balance", equity)
+    realized = state.get("realized_pnl", position.get("realized_pnl", 0.0))
+    unrealized = state.get("unrealized_pnl", position.get("unrealized_pnl", 0.0))
+    qty = position.get("signed_qty", position.get("qty"))
+
+    try:
+        update_strategy_account_metrics(
+            strategy_id,
+            currency=currency,
+            instrument=instrument,
+            equity=float(equity) if equity is not None else None,
+            balance=float(balance) if balance is not None else None,
+            realized_pnl=float(realized) if realized is not None else None,
+            unrealized_pnl=float(unrealized) if unrealized is not None else None,
+            net_exposure_qty=float(qty) if qty is not None else None,
+        )
+    except (TypeError, ValueError):
+        log.warning("Invalid numeric strategy state for %s: %r", strategy_id, state)
+
+    vclimax = state.get("vclimax") or {}
+    if vclimax:
+        phase = str(vclimax.get("phase") or "")
+        for known_phase in metrics._VCLIMAX_PHASES:
+            metrics.vclimax_phase.labels(strategy=strategy_id, phase=known_phase).set(
+                1 if phase == known_phase else 0
+            )
+
+        label_instrument = instrument or "unknown"
+        for metric_name, gauge in (
+            ("active_stop", metrics.vclimax_active_stop),
+            ("entry_price", metrics.vclimax_entry_price),
+            ("climax_high", metrics.vclimax_climax_high),
+            ("climax_low", metrics.vclimax_climax_low),
+        ):
+            value = vclimax.get(metric_name)
+            if value is not None:
+                try:
+                    gauge.labels(strategy=strategy_id, instrument=label_instrument).set(float(value))
+                except (TypeError, ValueError):
+                    pass
+
+        bars_since = vclimax.get("bars_since_climax")
+        if bars_since is not None:
+            try:
+                metrics.vclimax_bars_since_climax.labels(strategy=strategy_id).set(float(bars_since))
+            except (TypeError, ValueError):
+                pass
 
 
 # ---------------------------------------------------------------------------
@@ -263,6 +357,11 @@ async def cancel_order(oid: int, strategy_id: str = "", instrument_id: str = "")
         raise HTTPException(status_code=422, detail="instrument_id required for cancel")
     if order_gateway is None:
         log.info(f"[PAPER] Mock cancel: oid={oid} {strategy_id}")
+        metrics.orders_canceled.labels(
+            strategy=strategy_id or "unknown",
+            instrument=instrument_id,
+            reason="requested",
+        ).inc()
         return {"status": "cancelled", "oid": oid}
     try:
         result = await order_gateway.cancel_order(coin, oid)
@@ -270,6 +369,11 @@ async def cancel_order(oid: int, strategy_id: str = "", instrument_id: str = "")
         raise HTTPException(status_code=502, detail=str(e))
     if result.get("status") != "ok":
         raise HTTPException(status_code=422, detail=str(result))
+    metrics.orders_canceled.labels(
+        strategy=strategy_id or "unknown",
+        instrument=instrument_id,
+        reason="requested",
+    ).inc()
     return {"status": "canceled", "oid": oid}
 
 
@@ -315,6 +419,7 @@ async def stop_strategy(strategy_id: str):
         raise HTTPException(status_code=404, detail=f"Strategy {strategy_id!r} not found")
     success = docker_manager.stop_strategy(spec.docker.container_name)
     _registered_strategies.pop(strategy_id, None)
+    metrics.strategy_state.labels(strategy=strategy_id).set(0)
     return {"status": "stopped" if success else "not_running", "strategy_id": strategy_id}
 
 
@@ -341,6 +446,7 @@ async def register_strategy(strategy_id: str, req: RegisterRequest):
 
     # Pre-register Prometheus label combinations so all series appear immediately
     metrics.init_strategy_metrics(strategy_id)
+    metrics.strategy_state.labels(strategy=strategy_id).set(1)
 
     log.info(f"Strategy registered: {strategy_id} instance={req.instance_id[:8]}")
     return {"status": "registered", "strategy_id": strategy_id}
@@ -354,6 +460,7 @@ async def register_strategy(strategy_id: str, req: RegisterRequest):
 async def push_strategy_state(strategy_id: str, state: dict[str, Any]):
     """Strategy pushes its state dict; orchestrator is a dumb cache."""
     _strategy_states[strategy_id] = state
+    _update_metrics_from_strategy_state(strategy_id, state)
     return {"status": "ok"}
 
 

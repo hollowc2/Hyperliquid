@@ -62,6 +62,7 @@ def main() -> None:
         spec = yaml.safe_load(f)
 
     strategy_id = str(spec["id"])
+    os.environ["STRATEGY_ID"] = strategy_id
     class_path = str(spec["class"])
     config_class_path = str(spec["config_class"])
     instrument_id = str(spec["instrument_id"])

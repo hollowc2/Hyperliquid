@@ -209,6 +209,7 @@ class FillDispatcher:
             # Prometheus metrics
             side_label = "buy" if is_buy else "sell"
             metrics.fills_total.labels(strategy=strategy_id, side=side_label).inc()
+            metrics.commissions_paid.labels(strategy=strategy_id, currency="USDC").inc(fee)
             submit_ts_ns = self._oid_to_submit_ts_ns.get(oid, 0)
             if submit_ts_ns and ts_event_ns > submit_ts_ns:
                 latency_ms = (ts_event_ns - submit_ts_ns) / 1e6
@@ -249,6 +250,11 @@ class FillDispatcher:
             # Release reserved notional
             if notional > 0:
                 await self._risk_manager.release_notional(strategy_id, notional)
+            metrics.orders_canceled.labels(
+                strategy=strategy_id,
+                instrument=update.get("order", {}).get("coin", "unknown"),
+                reason="exchange",
+            ).inc()
 
             cancel_data = {
                 "oid": oid,
