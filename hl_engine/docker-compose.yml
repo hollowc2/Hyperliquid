@@ -35,7 +35,7 @@ services:
     networks:
       - hl-net
       - monitoring_net
-    restart: "no"
+    restart: unless-stopped
     logging:
       driver: "json-file"
       options:

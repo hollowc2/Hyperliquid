@@ -12,7 +12,6 @@ Key safety properties:
 
 import asyncio
 import logging
-import os
 from typing import Optional
 
 import aiohttp
@@ -26,7 +25,7 @@ from tenacity import (
 
 from nautilus_trader.execution.messages import CancelOrder, SubmitOrder
 from nautilus_trader.live.execution_client import LiveExecutionClient
-from nautilus_trader.model.enums import AccountType, LiquiditySide, OmsType, OrderType, TimeInForce
+from nautilus_trader.model.enums import AccountType, LiquiditySide, OmsType, OrderType
 from nautilus_trader.model.identifiers import (
     AccountId,
     ClientId,
@@ -106,6 +105,8 @@ class ZmqRestExecClient(LiveExecutionClient):
         self._zmq_sock: Optional[zmq.asyncio.Socket] = None
         self._http: Optional[aiohttp.ClientSession] = None
         self._fill_task: Optional[asyncio.Task] = None
+        self._register_task: Optional[asyncio.Task] = None
+        self._register_interval_secs = 30.0
 
         # oid ↔ client_order_id maps
         self._order_id_map: dict[str, int] = {}       # client_order_id → oid
@@ -128,17 +129,7 @@ class ZmqRestExecClient(LiveExecutionClient):
         self._log.info(f"ZMQ fills SUB connected to {self._zmq_fills_url}, topic={topic.decode()}")
 
         self._fill_task = self.create_task(self._fill_recv_loop())
-
-        # Register with orchestrator
-        try:
-            async with self._http.post(
-                f"{self._rest_url}/strategies/{self._strategy_id_str}/register",
-                json={"instance_id": self._instance_id, "strategy_id": self._strategy_id_str},
-            ) as resp:
-                resp.raise_for_status()
-                self._log.info(f"Registered with orchestrator: {self._strategy_id_str} instance={self._instance_id[:8]}")
-        except Exception as e:
-            self._log.warning(f"Could not register with orchestrator: {e}")
+        self._register_task = self.create_task(self._register_loop())
 
         # Reconcile open orders and account state
         await self._reconcile()
@@ -146,6 +137,8 @@ class ZmqRestExecClient(LiveExecutionClient):
     async def _disconnect(self) -> None:
         if self._fill_task:
             self._fill_task.cancel()
+        if self._register_task:
+            self._register_task.cancel()
         if self._zmq_sock:
             self._zmq_sock.close()
         if self._zmq_ctx:
@@ -153,6 +146,31 @@ class ZmqRestExecClient(LiveExecutionClient):
         if self._http:
             await self._http.close()
         self._log.info("ZMQ exec client disconnected")
+
+    async def _register_loop(self) -> None:
+        """Keep the orchestrator aware of this live strategy instance."""
+        registered_once = False
+        backoff = 1.0
+        while True:
+            try:
+                async with self._http.post(
+                    f"{self._rest_url}/strategies/{self._strategy_id_str}/register",
+                    json={"instance_id": self._instance_id, "strategy_id": self._strategy_id_str},
+                ) as resp:
+                    resp.raise_for_status()
+                if not registered_once:
+                    self._log.info(
+                        f"Registered with orchestrator: {self._strategy_id_str} instance={self._instance_id[:8]}"
+                    )
+                    registered_once = True
+                backoff = self._register_interval_secs
+                await asyncio.sleep(self._register_interval_secs)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                self._log.warning(f"Could not register with orchestrator: {e}")
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2.0, self._register_interval_secs)
 
     # ------------------------------------------------------------------
     # Order submission

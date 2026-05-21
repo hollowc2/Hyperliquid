@@ -1,0 +1,14 @@
+id: vclimax-btc
+class: hl_engine.strategy.v_climax_reversal_strategy.VClimaxReversalStrategy
+config_class: hl_engine.config.v_climax_reversal_config.VClimaxReversalConfig
+instrument_id: BTC-USD.HYPERLIQUID
+parameters:
+  fallback_account_equity: 1000.0
+risk:
+  max_position_usd: 1000
+  max_leverage: 1.0
+rate_limit:
+  max_orders_per_second: 2
+docker:
+  image: hl-engine:latest
+  container_name: strategy-vclimax-btc

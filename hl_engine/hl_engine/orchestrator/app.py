@@ -45,6 +45,7 @@ rate_limiter = None      # RateLimiter
 risk_manager = None      # GlobalRiskManager
 order_gateway = None     # HyperliquidOrderGateway
 fill_dispatcher = None   # FillDispatcher
+paper_execution = None   # PaperExecutionEngine
 strategy_registry = None  # StrategyRegistry
 docker_manager = None    # DockerManager
 data_feed = None         # OrchestratorDataFeed
@@ -57,6 +58,28 @@ _metrics_initialized: set[str] = set()
 
 # Strategy state cache — dumb KV store, strategies POST here, monitor GETs here
 _strategy_states: dict[str, Any] = {}
+
+
+def _strategy_initial_balance(strategy_id: str) -> float:
+    spec = strategy_registry.get(strategy_id) if strategy_registry else None
+    if spec and "fallback_account_equity" in spec.parameters:
+        return float(spec.parameters["fallback_account_equity"])
+    if strategy_id == "vclimax-btc":
+        return 1000.0
+    return 10_000.0
+
+
+def _top_of_book_fill_price(instrument_id: str, is_buy: bool) -> Optional[float]:
+    if data_feed is None:
+        return None
+    coin = instrument_id.split("-")[0]
+    snap = data_feed.get_snapshot(coin)
+    if not snap:
+        return None
+    levels = snap.get("asks" if is_buy else "bids", [])
+    if not levels:
+        return None
+    return float(levels[0][0])
 
 
 # ---------------------------------------------------------------------------
@@ -146,7 +169,13 @@ async def submit_order(req: OrderRequest):
     # Notional estimate uses limit_px (correct for both MARKET and LIMIT paths)
     notional = limit_px * sz
 
-    allowed, reason = await risk_manager.check_order(req.strategy_id, notional, req.is_reduce)
+    paper_mode = order_gateway is None and paper_execution is not None
+    is_reduce = req.is_reduce
+    if paper_mode:
+        paper_execution.ensure_account(req.strategy_id, _strategy_initial_balance(req.strategy_id))
+        is_reduce = is_reduce or paper_execution.order_reduces_position(req.strategy_id, is_buy, sz)
+
+    allowed, reason = await risk_manager.check_order(req.strategy_id, notional, is_reduce)
     if not allowed:
         metrics.orders_rejected.labels(strategy=req.strategy_id, reason="risk").inc()
         raise HTTPException(status_code=422, detail=reason)
@@ -154,11 +183,21 @@ async def submit_order(req: OrderRequest):
     # 6. Submit to Hyperliquid (or mock in paper-trade mode)
     side_label = "buy" if is_buy else "sell"
     if order_gateway is None:
-        # Paper-trade / no private key: return a synthetic oid and count as immediate fill
+        if paper_execution is None:
+            raise HTTPException(status_code=503, detail="Paper execution not initialised")
+
+        # Paper-trade / no private key: create a synthetic oid and immediate fill.
         import random
         oid = random.randint(100_000, 999_999)
-        log.info(f"[PAPER] Mock order accepted: {req.strategy_id} {req.side} {sz} {coin} @ {limit_px} → mock_oid={oid}")
-        metrics.fills_total.labels(strategy=req.strategy_id, side=side_label).inc()
+        fill_px = _top_of_book_fill_price(req.instrument_id, is_buy)
+        if fill_px is None:
+            if req.order_type.upper() == "LIMIT" and req.price is not None:
+                fill_px = float(req.price)
+            elif req.price is not None and req.price > 0:
+                fill_px = float(req.price)
+            else:
+                raise HTTPException(status_code=422, detail="Paper orders require a live book price")
+        log.info(f"[PAPER] Mock order accepted: {req.strategy_id} {req.side} {sz} {coin} @ {fill_px} → mock_oid={oid}")
     else:
         try:
             result = await order_gateway.submit_order(coin, is_buy, sz, limit_px, order_type_dict)
@@ -193,7 +232,19 @@ async def submit_order(req: OrderRequest):
     persistence.save_oid_mapping(oid, req.strategy_id, req.client_order_id)
     if fill_dispatcher is not None:
         fill_dispatcher.register_oid(oid, req.strategy_id, req.client_order_id, notional, submit_ts_ns)
-    await risk_manager.reserve_notional(req.strategy_id, notional)
+    if paper_mode:
+        await paper_execution.execute_order(
+            oid=oid,
+            strategy_id=req.strategy_id,
+            client_order_id=req.client_order_id,
+            instrument_id=req.instrument_id,
+            side=req.side,
+            qty=sz,
+            fill_px=fill_px,
+            initial_balance=_strategy_initial_balance(req.strategy_id),
+        )
+    else:
+        await risk_manager.reserve_notional(req.strategy_id, notional)
 
     metrics.orders_submitted.labels(
         strategy=req.strategy_id,
@@ -325,6 +376,9 @@ async def reconcile(strategy_id: str):
         if order_gateway is not None:
             open_orders = await order_gateway.get_open_orders()
             account_state = await order_gateway.get_account_state()
+        elif paper_execution is not None:
+            open_orders = []
+            account_state = paper_execution.account_state(strategy_id, _strategy_initial_balance(strategy_id))
         else:
             open_orders = []
             account_state = {}
@@ -368,7 +422,12 @@ async def get_risk():
 @app.get("/account/{strategy_id}")
 async def get_account(strategy_id: str):
     try:
-        state = await order_gateway.get_account_state()
+        if order_gateway is not None:
+            state = await order_gateway.get_account_state()
+        elif paper_execution is not None:
+            state = paper_execution.account_state(strategy_id, _strategy_initial_balance(strategy_id))
+        else:
+            state = {}
         return {"strategy_id": strategy_id, "account_state": state}
     except Exception as e:
         raise HTTPException(status_code=502, detail=str(e))

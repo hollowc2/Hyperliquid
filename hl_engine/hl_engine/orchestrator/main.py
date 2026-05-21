@@ -28,7 +28,6 @@ Environment variables:
 import asyncio
 import logging
 import os
-from pathlib import Path
 
 import uvicorn
 import zmq.asyncio
@@ -39,6 +38,7 @@ from hl_engine.orchestrator.docker_manager import DockerManager
 from hl_engine.orchestrator.fill_dispatcher import FillDispatcher
 from hl_engine.orchestrator.global_risk import GlobalRiskManager
 from hl_engine.orchestrator.order_gateway import HyperliquidOrderGateway
+from hl_engine.orchestrator.paper_execution import PaperExecutionEngine
 from hl_engine.orchestrator.persistence import PersistenceStore
 from hl_engine.orchestrator.rate_limiter import RateLimiter
 from hl_engine.orchestrator.strategy_registry import StrategyRegistry
@@ -153,6 +153,13 @@ async def main() -> None:
 
     log.info("ZMQ sockets bound on ports 5555 (data) and 5556 (fills)")
 
+    paper_exec = PaperExecutionEngine(
+        persistence=store,
+        risk_manager=risk_mgr,
+        zmq_fills_pub=fills_pub,
+    )
+    await paper_exec.restore_from_db()
+
     # ------------------------------------------------------------------
     # 9. Data feed and fill dispatcher
     # ------------------------------------------------------------------
@@ -188,6 +195,7 @@ async def main() -> None:
     app_module.risk_manager = risk_mgr
     app_module.order_gateway = gateway
     app_module.fill_dispatcher = dispatcher
+    app_module.paper_execution = paper_exec
     app_module.strategy_registry = registry
     app_module.docker_manager = docker_mgr
     app_module.data_feed = feed

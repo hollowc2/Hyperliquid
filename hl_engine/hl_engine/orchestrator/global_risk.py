@@ -13,7 +13,6 @@ Recovery on restart:
 
 import asyncio
 import logging
-from typing import Optional
 
 from hl_engine.orchestrator import metrics
 
@@ -121,6 +120,12 @@ class GlobalRiskManager:
         async with self._lock:
             current = self._strategy_notionals.get(strategy_id, 0.0)
             self._strategy_notionals[strategy_id] = max(0.0, current - notional)
+            self._update_gauges(strategy_id)
+
+    async def set_notional(self, strategy_id: str, notional: float) -> None:
+        """Set current exposure directly after immediate-fill paper accounting."""
+        async with self._lock:
+            self._strategy_notionals[strategy_id] = max(0.0, notional)
             self._update_gauges(strategy_id)
 
     # ------------------------------------------------------------------
