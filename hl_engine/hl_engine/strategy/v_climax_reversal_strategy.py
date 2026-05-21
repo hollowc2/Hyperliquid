@@ -82,6 +82,7 @@ class VClimaxReversalStrategy(Strategy):
         self._entry_qty: Optional[float] = None
         self._active_stop: Optional[float] = None
         self._total_commission = 0.0
+        self._last_state_push_ns = 0
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -119,6 +120,7 @@ class VClimaxReversalStrategy(Strategy):
             "VClimaxReversalStrategy started | "
             f"instrument={self._instrument_id} bar_minutes={self._config.bar_minutes}"
         )
+        self._push_state_snapshot()
 
     def on_stop(self) -> None:
         if self._instrument_id:
@@ -135,6 +137,7 @@ class VClimaxReversalStrategy(Strategy):
             return
 
         self._on_strategy_bar(closed_bar)
+        self._push_state_snapshot(min_interval_secs=5.0)
 
     def on_order_book_deltas(self, deltas: OrderBookDeltas) -> None:
         if self._instrument_id is None:
@@ -149,6 +152,7 @@ class VClimaxReversalStrategy(Strategy):
             self._maybe_enter(float(best_ask))
         if best_bid is not None:
             self._maybe_exit(float(best_bid))
+        self._push_state_snapshot(min_interval_secs=5.0)
 
     # ------------------------------------------------------------------
     # Order events
@@ -413,14 +417,20 @@ class VClimaxReversalStrategy(Strategy):
             "duration_s": (self.clock.timestamp_ns() - position.ts_opened) / 1e9,
         }
 
-    def _push_state_snapshot(self) -> None:
+    def _push_state_snapshot(self, min_interval_secs: float = 0.0) -> None:
         import asyncio
         import os
+        import time
 
         base_url = os.getenv("ORCHESTRATOR_REST_URL", "")
         strategy_id = os.getenv("STRATEGY_ID", "vclimax-btc")
         if not base_url:
             return
+
+        now_ns = time.time_ns()
+        if min_interval_secs > 0.0 and now_ns - self._last_state_push_ns < min_interval_secs * 1_000_000_000:
+            return
+        self._last_state_push_ns = now_ns
 
         state = self._build_state_snapshot()
         try:
