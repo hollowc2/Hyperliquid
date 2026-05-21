@@ -14,7 +14,7 @@ class VClimaxReversalConfig(StrategyConfig):
     source_bar_minutes: int = 1
 
     lookback_bars: int = 10
-    waterfall_drop_pct: float = 0.02
+    waterfall_drop_pct: float = 0.005
     volume_multiple: float = 2.5
     atr_period: int = 10
     atr_stop_multiple: float = 1.0

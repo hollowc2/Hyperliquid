@@ -44,6 +44,7 @@ from hl_engine.strategy.apex_strategy import ApexStrategy
 CATALOG_PATH = Path(os.getenv("HL_CATALOG_PATH", "data/catalog"))
 INSTRUMENT_ID = os.getenv("HL_INSTRUMENT_ID", "BTC-USD.HYPERLIQUID")
 STARTING_BALANCE_USDC = float(os.getenv("HL_STARTING_BALANCE", "100000"))
+NS_PER_DAY = 86_400 * 1_000_000_000
 
 
 def _catalog_has(catalog: ParquetDataCatalog, data_cls, instrument_id: InstrumentId) -> bool:
@@ -232,10 +233,22 @@ def _rows_to_liquidations(rows: list[dict], instrument_id: InstrumentId) -> list
 
 
 def _parse_ts(ts: str) -> int:
-    """Convert YYYY-MM-DD string to nanosecond timestamp."""
+    """Convert YYYY-MM-DD or ISO datetime string to nanosecond timestamp."""
     from datetime import datetime, timezone
-    dt = datetime.strptime(ts, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    if "T" in ts:
+        dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        else:
+            dt = dt.astimezone(timezone.utc)
+    else:
+        dt = datetime.strptime(ts, "%Y-%m-%d").replace(tzinfo=timezone.utc)
     return int(dt.timestamp() * 1e9)
+
+
+def _bounded_warmup_start_ns(start_ns: int, warmup_days: int) -> int:
+    """Return a non-negative lower bound for custom-data warmup."""
+    return max(0, start_ns - max(0, warmup_days) * NS_PER_DAY)
 
 
 def _resample_bars(bars_1m, bar_minutes: int, instrument):
@@ -323,12 +336,12 @@ def main() -> None:
     parser.add_argument(
         "--start",
         default=os.getenv("HL_START_DATE", default_start),
-        help=f"Start date YYYY-MM-DD (default: {default_start}, earliest available bar data)",
+        help=f"Start date/datetime YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS (default: {default_start})",
     )
     parser.add_argument(
         "--end",
         default=os.getenv("HL_END_DATE", default_end),
-        help=f"End date YYYY-MM-DD (default: {default_end}, latest available bar data)",
+        help=f"End date/datetime YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS (default: {default_end})",
     )
     parser.add_argument(
         "--bar-minutes",
@@ -343,6 +356,15 @@ def main() -> None:
         default=False,
         help="Load L2 order book data (enables OBI/microprice features). "
              "Uses ~4-8 GB RAM per week of data — limit date range accordingly.",
+    )
+    parser.add_argument(
+        "--apex-custom-warmup-days",
+        type=int,
+        default=int(os.getenv("HL_APEX_CUSTOM_WARMUP_DAYS", "7")),
+        help=(
+            "Days of funding/OI custom data to preload before --start for Apex "
+            "(default: 7). Lower this for memory-constrained smoke tests."
+        ),
     )
     parser.add_argument(
         "--vclimax-waterfall-drop-pct",
@@ -374,18 +396,22 @@ def main() -> None:
     print(f"Backtest window: {args.start} → {args.end}")
 
     # Funding and OI are loaded without a lower time bound so that historical
-    # records written by build_historical_catalog.py pre-seed the FundingModel
-    # before the first bar arrives (warmup). Liquidations are backtest-window only.
+    # records pre-seed the FundingModel before the first bar arrives. Keep this
+    # bounded so full-catalog custom streams do not OOM small backtest hosts.
     if needs_apex_data:
-        funding_rows = _load_custom_data(CATALOG_PATH, "funding_rate", INSTRUMENT_ID, 0, end_ns)
-        oi_rows = _load_custom_data(CATALOG_PATH, "open_interest", INSTRUMENT_ID, 0, end_ns)
+        custom_start_ns = _bounded_warmup_start_ns(start_ns, args.apex_custom_warmup_days)
+        funding_rows = _load_custom_data(CATALOG_PATH, "funding_rate", INSTRUMENT_ID, custom_start_ns, end_ns)
+        oi_rows = _load_custom_data(CATALOG_PATH, "open_interest", INSTRUMENT_ID, custom_start_ns, end_ns)
         liq_rows = _load_custom_data(CATALOG_PATH, "liquidations", INSTRUMENT_ID, start_ns, end_ns)
     else:
+        custom_start_ns = start_ns
         funding_rows = []
         oi_rows = []
         liq_rows = []
 
     print(f"Catalog data available for {INSTRUMENT_ID}:")
+    if needs_apex_data:
+        print(f"  Apex custom warmup: {args.apex_custom_warmup_days} day(s)")
     print(f"  OrderBookDelta : {'YES' if has_ob else 'NO  (OBI/microprice features will be 0)'}")
     print(f"  TradeTick      : {'YES' if has_trades else 'NO  (TFI/Hawkes features will be 0)'}")
     print(f"  Bar            : {'YES' if has_bars else 'NO  (WARNING: bars required for regime/volatility)'}")
