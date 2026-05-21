@@ -444,8 +444,11 @@ async def register_strategy(strategy_id: str, req: RegisterRequest):
         rate_limiter.configure_strategy(strategy_id, spec.rate_limit.max_orders_per_second)
         risk_manager.configure_strategy(strategy_id, spec.risk.max_position_usd)
 
-    # Pre-register Prometheus label combinations so all series appear immediately
-    metrics.init_strategy_metrics(strategy_id)
+    # Pre-register Prometheus label combinations once; the register loop refreshes
+    # every 30s and must not reset stateful gauges such as VClimax phase.
+    if strategy_id not in _metrics_initialized:
+        metrics.init_strategy_metrics(strategy_id)
+        _metrics_initialized.add(strategy_id)
     metrics.strategy_state.labels(strategy=strategy_id).set(1)
 
     log.info(f"Strategy registered: {strategy_id} instance={req.instance_id[:8]}")
