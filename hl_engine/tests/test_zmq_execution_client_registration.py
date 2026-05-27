@@ -1,11 +1,18 @@
 import asyncio
+from types import SimpleNamespace
 
 import aiohttp
 import pytest
-from nautilus_trader.model.enums import OrderSide
+from nautilus_trader.model.enums import OrderSide, OrderStatus, OrderType, TimeInForce
+from nautilus_trader.model.identifiers import AccountId, ClientOrderId, InstrumentId, VenueOrderId
+from nautilus_trader.model.objects import Price, Quantity
 
 from hl_engine.adapters.zmq import execution_client
-from hl_engine.adapters.zmq.execution_client import ZmqRestExecClient, _is_buy_side
+from hl_engine.adapters.zmq.execution_client import (
+    ZmqRestExecClient,
+    _build_order_status_report,
+    _is_buy_side,
+)
 
 
 class _FakeResponse:
@@ -76,3 +83,38 @@ def test_order_side_detection_uses_enum_not_numeric_value():
     assert OrderSide.SELL.value == 2
     assert _is_buy_side(OrderSide.BUY) is True
     assert _is_buy_side(OrderSide.SELL) is False
+
+
+def test_order_status_report_uses_cached_order_fields():
+    client_order_id = ClientOrderId("C-001")
+    order = SimpleNamespace(
+        client_order_id=client_order_id,
+        venue_order_id=None,
+        instrument_id=InstrumentId.from_str("BTC-USD.HYPERLIQUID"),
+        side=OrderSide.BUY,
+        order_type=OrderType.LIMIT,
+        time_in_force=TimeInForce.GTC,
+        status=OrderStatus.FILLED,
+        quantity=Quantity.from_str("0.10"),
+        filled_qty=Quantity.from_str("0.10"),
+        has_price=True,
+        price=Price.from_str("100000.0"),
+        avg_px=None,
+        ts_init=111,
+        ts_last=222,
+    )
+
+    report = _build_order_status_report(
+        account_id=AccountId("HYPERLIQUID-vclimax-btc"),
+        order=order,
+        client_order_id=client_order_id,
+        venue_order_id=VenueOrderId("42"),
+        ts_init=333,
+        fallback_ts_ns=123_456_789,
+    )
+
+    assert report.client_order_id == client_order_id
+    assert report.venue_order_id == VenueOrderId("42")
+    assert report.order_status == OrderStatus.FILLED
+    assert report.quantity == Quantity.from_str("0.10")
+    assert report.filled_qty == Quantity.from_str("0.10")

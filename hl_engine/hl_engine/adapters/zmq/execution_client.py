@@ -12,6 +12,7 @@ Key safety properties:
 
 import asyncio
 import logging
+from decimal import Decimal
 from typing import Optional
 
 import aiohttp
@@ -23,7 +24,16 @@ from tenacity import (
     wait_exponential,
 )
 
-from nautilus_trader.execution.messages import CancelOrder, SubmitOrder
+from nautilus_trader.core.uuid import UUID4
+from nautilus_trader.execution.messages import (
+    CancelOrder,
+    GenerateFillReports,
+    GenerateOrderStatusReport,
+    GenerateOrderStatusReports,
+    GeneratePositionStatusReports,
+    SubmitOrder,
+)
+from nautilus_trader.execution.reports import FillReport, OrderStatusReport, PositionStatusReport
 from nautilus_trader.live.execution_client import LiveExecutionClient
 from nautilus_trader.model.enums import AccountType, LiquiditySide, OmsType, OrderSide, OrderType
 from nautilus_trader.model.identifiers import (
@@ -50,6 +60,40 @@ def _is_5xx(exc: Exception) -> bool:
     if isinstance(exc, aiohttp.ClientResponseError):
         return exc.status >= 500
     return False
+
+
+def _build_order_status_report(
+    account_id: AccountId,
+    order,
+    client_order_id: ClientOrderId,
+    venue_order_id: VenueOrderId,
+    ts_init: int,
+    fallback_ts_ns: int,
+) -> OrderStatusReport:
+    ts_accepted = getattr(order, "ts_init", 0) or fallback_ts_ns
+    ts_last = getattr(order, "ts_last", 0) or fallback_ts_ns
+    price = getattr(order, "price", None) if getattr(order, "has_price", False) else None
+    avg_px = getattr(order, "avg_px", None)
+
+    return OrderStatusReport(
+        account_id=account_id,
+        instrument_id=order.instrument_id,
+        venue_order_id=venue_order_id,
+        order_side=order.side,
+        order_type=order.order_type,
+        time_in_force=order.time_in_force,
+        order_status=order.status,
+        quantity=order.quantity,
+        filled_qty=order.filled_qty,
+        report_id=UUID4(),
+        ts_accepted=ts_accepted,
+        ts_last=ts_last,
+        ts_init=ts_init,
+        client_order_id=client_order_id,
+        venue_position_id=None,
+        price=price,
+        avg_px=Decimal(str(avg_px)) if avg_px is not None else None,
+    )
 
 
 class ZmqRestExecClient(LiveExecutionClient):
@@ -151,6 +195,64 @@ class ZmqRestExecClient(LiveExecutionClient):
         if self._http:
             await self._http.close()
         self._log.info("ZMQ exec client disconnected")
+
+    async def generate_order_status_report(
+        self,
+        command: GenerateOrderStatusReport,
+    ) -> OrderStatusReport | None:
+        client_order_id = command.client_order_id
+        venue_order_id = command.venue_order_id
+
+        if client_order_id is None and venue_order_id is None:
+            raise ValueError("Either client_order_id or venue_order_id must be provided")
+
+        if client_order_id is None and venue_order_id is not None:
+            try:
+                client_order_id_str = self._oid_to_client_id.get(int(venue_order_id.value))
+            except ValueError:
+                client_order_id_str = None
+            if client_order_id_str is not None:
+                client_order_id = ClientOrderId(client_order_id_str)
+
+        if client_order_id is None:
+            return None
+
+        order = self._cache.order(client_order_id)
+        if order is None:
+            return None
+
+        oid = self._order_id_map.get(client_order_id.value)
+        if venue_order_id is None:
+            venue_order_id = VenueOrderId(str(oid)) if oid is not None else order.venue_order_id
+        if venue_order_id is None:
+            return None
+
+        return _build_order_status_report(
+            account_id=self.account_id,
+            order=order,
+            client_order_id=client_order_id,
+            venue_order_id=venue_order_id,
+            ts_init=command.ts_init,
+            fallback_ts_ns=self._clock.timestamp_ns(),
+        )
+
+    async def generate_order_status_reports(
+        self,
+        command: GenerateOrderStatusReports,
+    ) -> list[OrderStatusReport]:
+        return []
+
+    async def generate_fill_reports(
+        self,
+        command: GenerateFillReports,
+    ) -> list[FillReport]:
+        return []
+
+    async def generate_position_status_reports(
+        self,
+        command: GeneratePositionStatusReports,
+    ) -> list[PositionStatusReport]:
+        return []
 
     async def _register_loop(self) -> None:
         """Keep the orchestrator aware of this live strategy instance."""
