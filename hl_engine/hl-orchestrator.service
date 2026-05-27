@@ -1,20 +1,20 @@
 [Unit]
 Description=HL Engine — Multi-Strategy Orchestrator
-Documentation=https://github.com/hollowc2/HyperLiquid
+Documentation=https://github.com/hollowc2/hyperliquid
 After=docker.service network-online.target
 Requires=docker.service
+StartLimitIntervalSec=180
+StartLimitBurst=5
 
 [Service]
 Type=simple
 User=billy
-WorkingDirectory=/opt/Hyperliquid/hl_engine
+WorkingDirectory=/opt/hyperliquid/hl_engine
 ExecStartPre=docker compose build --quiet orchestrator
 ExecStart=docker compose up orchestrator
 ExecStop=docker compose stop orchestrator
 Restart=always
 RestartSec=15
-StartLimitIntervalSec=180
-StartLimitBurst=5
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=hl-orchestrator

@@ -1684,9 +1684,15 @@
       {
         "allValue": null,
         "current": {
-          "selected": false,
-          "text": "",
-          "value": ""
+          "selected": true,
+          "text": [
+            "apex-btc",
+            "ma-cross-btc"
+          ],
+          "value": [
+            "apex-btc",
+            "ma-cross-btc"
+          ]
         },
         "datasource": {
           "type": "prometheus",

@@ -128,3 +128,4 @@ class ApexStrategyConfig(StrategyConfig):
 
     instrument_id: str = "BTC-USD.HYPERLIQUID"
     apex_config: Optional[ApexConfig] = None
+    initial_balance_usdc: float = 10_000.0

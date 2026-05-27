@@ -8,3 +8,4 @@ class MaCrossConfig(StrategyConfig):
     fast_period: int = 10
     slow_period: int = 30
     bar_minutes: int = 1  # bar aggregation in minutes (e.g. 1, 5, 30)
+    initial_balance_usdc: float = 10_000.0

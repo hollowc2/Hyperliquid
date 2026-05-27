@@ -16,17 +16,14 @@ from typing import Optional
 
 from nautilus_trader.model.data import Bar, BarType, OrderBookDeltas, TradeTick
 from nautilus_trader.model.enums import (
-    BarAggregation,
     BookType,
     OrderSide,
     OrderType,
-    PriceType,
     TimeInForce,
 )
 from nautilus_trader.model.identifiers import InstrumentId
 from nautilus_trader.model.instruments import Instrument
 from nautilus_trader.model.objects import Price, Quantity
-from nautilus_trader.model.orders import LimitOrder, MarketOrder
 from nautilus_trader.trading.strategy import Strategy
 
 from hl_engine.config.apex_config import ApexStrategyConfig
@@ -153,7 +150,12 @@ class ApexStrategy(Strategy):
 
         import os
         from pathlib import Path
-        state_dir = Path(os.getenv("HL_CATALOG_PATH", "data/catalog")).parent
+        state_dir = Path(
+            os.getenv(
+                "HL_STATE_DIR",
+                Path(os.getenv("HL_CATALOG_PATH", "data/catalog")).parent,
+            )
+        )
         state_dir.mkdir(parents=True, exist_ok=True)
         self._state_file = str(state_dir / "apex_state.json")
 

@@ -1,20 +1,18 @@
 [Unit]
 Description=HL Engine — APEX Live Trader
-Documentation=https://github.com/hollowc2/HyperLiquid
-After=docker.service network-online.target
-Requires=docker.service
+Documentation=https://github.com/hollowc2/hyperliquid
+After=network-online.target
+StartLimitIntervalSec=180
+StartLimitBurst=5
 
 [Service]
 Type=simple
 User=billy
-WorkingDirectory=/opt/Hyperliquid/hl_engine
-ExecStartPre=docker compose build --quiet live-trader
-ExecStart=docker compose up live-trader
-ExecStop=docker compose stop live-trader
+WorkingDirectory=/opt/hyperliquid/hl_engine
+Environment=HL_STATE_DIR=/opt/hyperliquid/hl_engine/data
+ExecStart=/opt/hyperliquid/hl_engine/.venv/bin/python -m hl_engine.run_live
 Restart=always
 RestartSec=15
-StartLimitIntervalSec=180
-StartLimitBurst=5
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=hl-live-trader

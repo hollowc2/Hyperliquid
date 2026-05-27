@@ -1,26 +1,26 @@
 [Unit]
 Description=HL Engine — Hyperliquid Live Data Recorder
-Documentation=https://github.com/hollowc2/HyperLiquid
+Documentation=https://github.com/hollowc2/hyperliquid
 After=docker.service network-online.target
 Requires=docker.service
+StartLimitIntervalSec=180
+StartLimitBurst=5
 
 [Service]
 Type=simple
 User=billy
 
 # --- Update this path to your clone on the VPS ---
-WorkingDirectory=/opt/Hyperliquid/hl_engine
+WorkingDirectory=/opt/hyperliquid/hl_engine
 
 # Build the image on first start (no-op if already built)
 ExecStartPre=docker compose build --quiet recorder
 
-ExecStart=docker compose up recorder
+ExecStart=docker compose up --no-deps recorder
 ExecStop=docker compose stop recorder
 
 Restart=always
 RestartSec=15
-StartLimitIntervalSec=180
-StartLimitBurst=5
 
 StandardOutput=journal
 StandardError=journal

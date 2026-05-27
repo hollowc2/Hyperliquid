@@ -1,4 +1,4 @@
-# HyperLiquid
+# hyperliquid
 
 A collection of tools for trading, monitoring, and analysis on the Hyperliquid perpetuals exchange.
 

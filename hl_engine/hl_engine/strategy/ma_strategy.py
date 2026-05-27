@@ -37,6 +37,8 @@ class MaCrossStrategy(Strategy):
         self._instrument_id: Optional[InstrumentId] = None
         self._instrument: Optional[Instrument] = None
         self._active_order_id = None
+        self._notional_limit_halted = False
+        self._signed_position_qty = 0.0
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -101,6 +103,12 @@ class MaCrossStrategy(Strategy):
             return
 
         side = OrderSide.BUY if crossed_up else OrderSide.SELL
+        if self._side_increases_position(side):
+            return
+
+        if self._notional_limit_halted and not self._side_reduces_position(side):
+            return
+
         qty  = Quantity(FIXED_SIZE, self._instrument.size_precision)
 
         order = self.order_factory.market(
@@ -124,6 +132,9 @@ class MaCrossStrategy(Strategy):
     def on_order_filled(self, event) -> None:
         if self._active_order_id and event.client_order_id == self._active_order_id:
             self._active_order_id = None
+        signed_qty = float(event.last_qty) if event.order_side == OrderSide.BUY else -float(event.last_qty)
+        updated_qty = self._signed_position_qty + signed_qty
+        self._signed_position_qty = 0.0 if abs(updated_qty) < 1e-12 else updated_qty
 
     def on_order_canceled(self, event) -> None:
         if self._active_order_id and event.client_order_id == self._active_order_id:
@@ -133,3 +144,40 @@ class MaCrossStrategy(Strategy):
         if self._active_order_id and event.client_order_id == self._active_order_id:
             self._active_order_id = None
             self.log.warning(f"Order rejected: {event.reason}")
+            if "notional" in (event.reason or "").lower():
+                self._notional_limit_halted = True
+                self.log.warning(
+                    "Notional limit hit — halting new entry orders until position is reduced"
+                )
+
+    def _side_reduces_position(self, side: OrderSide) -> bool:
+        if self._signed_position_qty != 0.0:
+            is_buy = side == OrderSide.BUY
+            return (self._signed_position_qty > 0.0) != is_buy
+
+        if self._instrument_id is None:
+            return False
+
+        open_positions = self.cache.positions_open(instrument_id=self._instrument_id)
+        if not open_positions:
+            return False
+
+        position = open_positions[0]
+        is_buy = side == OrderSide.BUY
+        return (position.is_long and not is_buy) or (not position.is_long and is_buy)
+
+    def _side_increases_position(self, side: OrderSide) -> bool:
+        if self._signed_position_qty != 0.0:
+            is_buy = side == OrderSide.BUY
+            return (self._signed_position_qty > 0.0) == is_buy
+
+        if self._instrument_id is None:
+            return False
+
+        open_positions = self.cache.positions_open(instrument_id=self._instrument_id)
+        if not open_positions:
+            return False
+
+        position = open_positions[0]
+        is_buy = side == OrderSide.BUY
+        return (position.is_long and is_buy) or (not position.is_long and not is_buy)

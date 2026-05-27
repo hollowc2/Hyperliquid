@@ -15,7 +15,7 @@ services:
   #   HL_WALLET_ADDRESS, HL_PRIVATE_KEY
   #   GLOBAL_NOTIONAL_CEILING_USD=50000
   #   GLOBAL_MAX_OPS=10
-  #   STRATEGIES_DIR=/opt/Hyperliquid/hl_engine/strategies  (host-absolute — set in .env)
+  #   STRATEGIES_DIR=/opt/hyperliquid/hl_engine/strategies  (host-absolute — set in .env)
   #   DB_PATH=/app/data/orchestrator.db
   orchestrator:
     build:

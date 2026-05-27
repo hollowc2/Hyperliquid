@@ -52,6 +52,7 @@ data_feed = None         # OrchestratorDataFeed
 
 # {strategy_id: {instance_id, registered_at}}
 _registered_strategies: dict[str, dict] = {}
+_REGISTRATION_TTL_SECS = 90.0
 
 # strategies whose Prometheus label-sets have been pre-registered
 _metrics_initialized: set[str] = set()
@@ -66,6 +67,8 @@ _peak_equity_by_strategy: dict[str, float] = {}
 
 def _strategy_initial_balance(strategy_id: str) -> float:
     spec = strategy_registry.get(strategy_id) if strategy_registry else None
+    if spec and "initial_balance_usdc" in spec.parameters:
+        return float(spec.parameters["initial_balance_usdc"])
     if spec and "fallback_account_equity" in spec.parameters:
         return float(spec.parameters["fallback_account_equity"])
     if strategy_id == "vclimax-btc":
@@ -174,6 +177,20 @@ def _update_metrics_from_strategy_state(strategy_id: str, state: dict[str, Any])
                 metrics.vclimax_bars_since_climax.labels(strategy=strategy_id).set(float(bars_since))
             except (TypeError, ValueError):
                 pass
+
+
+def _prune_stale_registrations() -> None:
+    """Mark strategies stale when their periodic register heartbeat stops."""
+    now = time.time()
+    stale = [
+        strategy_id
+        for strategy_id, info in _registered_strategies.items()
+        if now - float(info.get("registered_at", 0.0)) > _REGISTRATION_TTL_SECS
+    ]
+    for strategy_id in stale:
+        _registered_strategies.pop(strategy_id, None)
+        metrics.strategy_state.labels(strategy=strategy_id).set(0)
+        log.warning("Strategy registration stale: %s", strategy_id)
 
 
 # ---------------------------------------------------------------------------
@@ -383,19 +400,24 @@ async def cancel_order(oid: int, strategy_id: str = "", instrument_id: str = "")
 
 @app.get("/strategies")
 async def list_strategies():
+    _prune_stale_registrations()
     specs = strategy_registry.list_all() if strategy_registry else []
     running = {s["strategy_id"]: s for s in (docker_manager.list_running() if docker_manager else [])}
     result = []
     for spec in specs:
         container_state = running.get(spec.id, {})
+        registered = _registered_strategies.get(spec.id)
+        status = container_state.get("status")
+        if not status and docker_manager:
+            status = docker_manager.get_status(spec.docker.container_name)
         result.append({
             "id": spec.id,
             "instrument_id": spec.instrument_id,
             "class": spec.class_path,
-            "status": container_state.get("status", "stopped"),
+            "status": status or "stopped",
             "container_name": spec.docker.container_name,
-            "instance_id": container_state.get("instance_id"),
-            "registered": spec.id in _registered_strategies,
+            "instance_id": container_state.get("instance_id") or (registered or {}).get("instance_id"),
+            "registered": registered is not None,
             "risk_limit_usd": spec.risk.max_position_usd,
         })
     return result
@@ -421,6 +443,32 @@ async def stop_strategy(strategy_id: str):
     _registered_strategies.pop(strategy_id, None)
     metrics.strategy_state.labels(strategy=strategy_id).set(0)
     return {"status": "stopped" if success else "not_running", "strategy_id": strategy_id}
+
+
+@app.post("/admin/strategies/{strategy_id}/clear-paper-position")
+async def clear_paper_position(strategy_id: str):
+    """Clear stale paper exposure and risk without deleting historical fills."""
+    spec = strategy_registry.get(strategy_id) if strategy_registry else None
+    if spec is None:
+        raise HTTPException(status_code=404, detail=f"Strategy {strategy_id!r} not found")
+    if paper_execution is None or risk_manager is None or persistence is None:
+        raise HTTPException(status_code=503, detail="Paper execution is not initialised")
+
+    account = paper_execution.clear_position(strategy_id, _strategy_initial_balance(strategy_id))
+    await risk_manager.set_notional(strategy_id, 0.0)
+    persistence.save_risk_snapshot(strategy_id, 0.0)
+    return {
+        "status": "cleared",
+        "strategy_id": strategy_id,
+        "paper": {
+            "initial_balance": account.initial_balance,
+            "balance": account.balance,
+            "realized_pnl": account.realized_pnl,
+            "position_qty": account.position_qty,
+            "avg_price": account.avg_price,
+            "cumulative_fees": account.cumulative_fees,
+        },
+    }
 
 
 @app.post("/strategies/{strategy_id}/register")
@@ -524,6 +572,7 @@ async def get_snapshot(instrument_id: str):
 
 @app.get("/risk")
 async def get_risk():
+    _prune_stale_registrations()
     if risk_manager is None:
         raise HTTPException(status_code=503, detail="Risk manager not initialised")
     return risk_manager.get_summary()
@@ -564,6 +613,7 @@ async def get_bars(coin: str, interval: str = "1m", limit: int = 200):
 
 @app.get("/health")
 async def health():
+    _prune_stale_registrations()
     return {
         "status": "ok",
         "data_feed": data_feed is not None,
@@ -579,4 +629,5 @@ async def health():
 @app.get("/metrics", include_in_schema=False)
 async def prometheus_metrics():
     """Expose Prometheus metrics for scraping."""
+    _prune_stale_registrations()
     return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)

@@ -135,6 +135,15 @@ class PaperExecutionEngine:
             },
         }
 
+    def clear_position(self, strategy_id: str, initial_balance: float) -> PaperAccount:
+        """Clear stale paper exposure while preserving realized PnL and fees."""
+        account = self.ensure_account(strategy_id, initial_balance)
+        account.position_qty = 0.0
+        account.avg_price = 0.0
+        self._save_account(strategy_id, account)
+        self._update_metrics(strategy_id, account, instrument_id="")
+        return account
+
     async def execute_order(
         self,
         *,

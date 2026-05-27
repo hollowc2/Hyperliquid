@@ -119,6 +119,15 @@ async def main() -> None:
     # ------------------------------------------------------------------
     registry = StrategyRegistry(strategies_dir)
     registry.load()
+    for spec in registry.list_all():
+        risk_mgr.configure_strategy(spec.id, spec.risk.max_position_usd)
+
+    def _spec_initial_balance(spec) -> float:
+        if "initial_balance_usdc" in spec.parameters:
+            return float(spec.parameters["initial_balance_usdc"])
+        if "fallback_account_equity" in spec.parameters:
+            return float(spec.parameters["fallback_account_equity"])
+        return 10_000.0
 
     # ------------------------------------------------------------------
     # 7. Order gateway + Docker manager
@@ -159,6 +168,16 @@ async def main() -> None:
         zmq_fills_pub=fills_pub,
     )
     await paper_exec.restore_from_db()
+
+    if paper_trade or not private_key:
+        for spec in registry.list_all():
+            state = paper_exec.account_state(spec.id, _spec_initial_balance(spec))
+            paper_state = state.get("paper", {})
+            position_qty = float(paper_state.get("position_qty", 0.0))
+            avg_price = float(paper_state.get("avg_price", 0.0))
+            notional = abs(position_qty * avg_price)
+            await risk_mgr.set_notional(spec.id, notional)
+            store.save_risk_snapshot(spec.id, notional)
 
     # ------------------------------------------------------------------
     # 9. Data feed and fill dispatcher

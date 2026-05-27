@@ -25,7 +25,7 @@ from tenacity import (
 
 from nautilus_trader.execution.messages import CancelOrder, SubmitOrder
 from nautilus_trader.live.execution_client import LiveExecutionClient
-from nautilus_trader.model.enums import AccountType, LiquiditySide, OmsType, OrderType
+from nautilus_trader.model.enums import AccountType, LiquiditySide, OmsType, OrderSide, OrderType
 from nautilus_trader.model.identifiers import (
     AccountId,
     ClientId,
@@ -111,6 +111,7 @@ class ZmqRestExecClient(LiveExecutionClient):
         # oid ↔ client_order_id maps
         self._order_id_map: dict[str, int] = {}       # client_order_id → oid
         self._oid_to_client_id: dict[int, str] = {}   # oid → client_order_id
+        self._net_positions: dict[str, float] = {}
 
     # ------------------------------------------------------------------
     # NautilusTrader lifecycle
@@ -206,7 +207,7 @@ class ZmqRestExecClient(LiveExecutionClient):
             "quantity": float(order.quantity),
             "price": price,
             "time_in_force": order.time_in_force.name,
-            "is_reduce": False,
+            "is_reduce": self._order_reduces_position(order.instrument_id, is_buy),
         }
 
         try:
@@ -233,6 +234,19 @@ class ZmqRestExecClient(LiveExecutionClient):
                 client_order_id=order.client_order_id,
                 ts_event=self._clock.timestamp_ns(),
             )
+
+    def _order_reduces_position(self, instrument_id, is_buy: bool) -> bool:
+        """Return True when the order side opposes the cached net position."""
+        net_position = self._net_positions.get(str(instrument_id), 0.0)
+        if net_position != 0.0:
+            return (net_position > 0.0) != is_buy
+
+        positions = self._cache.positions_open(instrument_id=instrument_id)
+        if not positions:
+            return False
+
+        position = positions[0]
+        return (position.is_long and not is_buy) or (not position.is_long and is_buy)
 
     @retry(
         retry=retry_if_exception(_is_5xx),
@@ -352,6 +366,11 @@ class ZmqRestExecClient(LiveExecutionClient):
             ts_event=ts_event,
         )
 
+        signed_qty = fill_sz if order.side == OrderSide.BUY else -fill_sz
+        instrument_key = str(order.instrument_id)
+        updated_qty = self._net_positions.get(instrument_key, 0.0) + signed_qty
+        self._net_positions[instrument_key] = 0.0 if abs(updated_qty) < 1e-12 else updated_qty
+
     def _process_cancel(self, data: dict) -> None:
         oid = int(data.get("oid", 0))
         client_order_id_str = data.get("client_order_id") or self._oid_to_client_id.get(oid)
@@ -393,6 +412,7 @@ class ZmqRestExecClient(LiveExecutionClient):
 
             # Generate account state from clearinghouseState
             account_state = data.get("account_state", {})
+            self._restore_net_positions(account_state)
             await self._generate_account_state_from_data(account_state)
 
             self._log.info(
@@ -401,6 +421,15 @@ class ZmqRestExecClient(LiveExecutionClient):
         except Exception as e:
             self._log.warning(f"Reconciliation failed (proceeding with empty state): {e}")
             await self._generate_account_state_from_data({})
+
+    def _restore_net_positions(self, account_state: dict) -> None:
+        for item in account_state.get("assetPositions", []):
+            position = item.get("position", {})
+            coin = position.get("coin")
+            if not coin:
+                continue
+            instrument_id = f"{coin}-USD.HYPERLIQUID"
+            self._net_positions[instrument_id] = float(position.get("szi", 0.0))
 
     async def _generate_account_state_from_data(self, state: dict) -> None:
         from nautilus_trader.model.currencies import USDC

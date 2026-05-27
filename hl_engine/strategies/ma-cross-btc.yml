@@ -3,6 +3,7 @@ class: hl_engine.strategy.ma_strategy.MaCrossStrategy
 config_class: hl_engine.config.ma_config.MaCrossConfig
 instrument_id: BTC-USD.HYPERLIQUID
 parameters:
+  initial_balance_usdc: 1000.0
   fast_period: 10
   slow_period: 30
   bar_minutes: 1
