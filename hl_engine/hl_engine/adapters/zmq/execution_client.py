@@ -42,6 +42,10 @@ from hl_engine.transport.serialization import unwrap
 log = logging.getLogger(__name__)
 
 
+def _is_buy_side(side: OrderSide) -> bool:
+    return side == OrderSide.BUY
+
+
 def _is_5xx(exc: Exception) -> bool:
     if isinstance(exc, aiohttp.ClientResponseError):
         return exc.status >= 500
@@ -184,7 +188,7 @@ class ZmqRestExecClient(LiveExecutionClient):
             self._log.error(f"Instrument not found: {order.instrument_id}")
             return
 
-        is_buy = order.side.value == "BUY"
+        is_buy = _is_buy_side(order.side)
 
         # Determine price (for market orders, use best book price + slippage hint)
         price = None

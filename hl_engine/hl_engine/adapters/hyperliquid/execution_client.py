@@ -7,7 +7,6 @@ WebSocket fills come via userFills channel on the data client's WS connection.
 
 import asyncio
 import json
-from decimal import Decimal
 from typing import Optional
 
 import websockets
@@ -15,8 +14,7 @@ from websockets.connection import State as WsState
 
 from nautilus_trader.execution.messages import SubmitOrder, CancelOrder
 from nautilus_trader.live.execution_client import LiveExecutionClient
-from nautilus_trader.model.enums import AccountType, LiquiditySide, OmsType, OrderStatus, OrderType, TimeInForce
-from nautilus_trader.model.events import OrderFilled
+from nautilus_trader.model.enums import AccountType, LiquiditySide, OmsType, OrderSide, OrderType
 from nautilus_trader.model.identifiers import (
     AccountId,
     ClientId,
@@ -121,7 +119,7 @@ class HyperliquidLiveExecutionClient(LiveExecutionClient):
             return
 
         coin = instrument.raw_symbol.value
-        is_buy = order.side.value == "BUY"  # OrderSide.BUY
+        is_buy = order.side == OrderSide.BUY
         sz = float(order.quantity)
 
         try:
@@ -255,7 +253,6 @@ class HyperliquidLiveExecutionClient(LiveExecutionClient):
         processed = 0
         for fill in fills:
             oid = fill.get("oid")
-            coin = fill.get("coin", "")
             cl_ord_id_str = self._oid_to_client_id.get(int(oid)) if oid else None
             if cl_ord_id_str is None:
                 continue
@@ -272,7 +269,6 @@ class HyperliquidLiveExecutionClient(LiveExecutionClient):
             fill_px = float(fill.get("px", 0.0))
             fill_sz = float(fill.get("sz", 0.0))
             fee = float(fill.get("fee", 0.0))
-            is_buy = fill.get("side", "B") == "B"
             ts_event = int(fill.get("time", 0)) * 1_000_000
 
             from nautilus_trader.model.currencies import USDC

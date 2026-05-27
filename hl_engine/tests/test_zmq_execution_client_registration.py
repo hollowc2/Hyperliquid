@@ -2,9 +2,10 @@ import asyncio
 
 import aiohttp
 import pytest
+from nautilus_trader.model.enums import OrderSide
 
 from hl_engine.adapters.zmq import execution_client
-from hl_engine.adapters.zmq.execution_client import ZmqRestExecClient
+from hl_engine.adapters.zmq.execution_client import ZmqRestExecClient, _is_buy_side
 
 
 class _FakeResponse:
@@ -68,3 +69,10 @@ async def test_register_loop_retries_and_refreshes(monkeypatch):
         "strategy_id": "vclimax-btc",
     }
     assert sleep_calls == [1.0, 30.0]
+
+
+def test_order_side_detection_uses_enum_not_numeric_value():
+    assert OrderSide.BUY.value == 1
+    assert OrderSide.SELL.value == 2
+    assert _is_buy_side(OrderSide.BUY) is True
+    assert _is_buy_side(OrderSide.SELL) is False

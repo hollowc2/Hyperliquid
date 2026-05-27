@@ -6,12 +6,11 @@ No private key, no SDK, no signing. Fills are simulated at best bid/ask.
 
 import asyncio
 import uuid
-from decimal import Decimal
 
 from nautilus_trader.execution.messages import CancelOrder, SubmitOrder
 from nautilus_trader.live.execution_client import LiveExecutionClient
 from nautilus_trader.model.currencies import USDC
-from nautilus_trader.model.enums import AccountType, LiquiditySide, OmsType, OrderType
+from nautilus_trader.model.enums import AccountType, LiquiditySide, OmsType, OrderSide, OrderType
 from nautilus_trader.model.identifiers import (
     AccountId,
     ClientId,
@@ -90,7 +89,7 @@ class HyperliquidPaperExecClient(LiveExecutionClient):
             self._log.error(f"Instrument not found: {order.instrument_id}")
             return
 
-        is_buy = order.side.value == "BUY"
+        is_buy = order.side == OrderSide.BUY
 
         # Determine fill price
         fill_px = self._get_fill_price(order, instrument, is_buy)
