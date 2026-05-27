@@ -7,7 +7,10 @@ Trades 0.001 BTC on every fast/slow SMA crossover using market IOC orders.
 
 from collections import deque
 from datetime import datetime, timezone
+import json
+import os
 from typing import Optional
+from urllib.request import urlopen
 
 from nautilus_trader.model.data import Bar, BarType
 from nautilus_trader.model.enums import OrderSide, TimeInForce
@@ -19,6 +22,20 @@ from nautilus_trader.trading.strategy import Strategy
 from hl_engine.config.ma_config import MaCrossConfig
 
 FIXED_SIZE = 0.001  # BTC per trade
+
+
+def _extract_signed_position_qty(account_state: dict, instrument_id: str) -> float:
+    paper_state = account_state.get("paper", {})
+    if "position_qty" in paper_state:
+        return float(paper_state["position_qty"])
+
+    coin = instrument_id.split("-", 1)[0]
+    for item in account_state.get("assetPositions", []):
+        position = item.get("position", {})
+        if position.get("coin") == coin:
+            return float(position.get("szi", 0.0))
+
+    return 0.0
 
 
 class MaCrossStrategy(Strategy):
@@ -52,6 +69,8 @@ class MaCrossStrategy(Strategy):
             self.log.error(f"Instrument not found in cache: {self._instrument_id}")
             return
 
+        self._sync_position_from_orchestrator()
+
         bar_type = BarType.from_str(
             f"{self._config.instrument_id}-{self._config.bar_minutes}-MINUTE-LAST-EXTERNAL"
         )
@@ -72,6 +91,34 @@ class MaCrossStrategy(Strategy):
         if self._instrument_id:
             self.cancel_all_orders(self._instrument_id)
         self.log.info("MaCrossStrategy stopped")
+
+    def _sync_position_from_orchestrator(self) -> None:
+        base_url = os.getenv("ORCHESTRATOR_REST_URL", "").rstrip("/")
+        strategy_id = os.getenv("STRATEGY_ID", "ma-cross-btc")
+        if not base_url:
+            return
+
+        try:
+            with urlopen(f"{base_url}/account/{strategy_id}", timeout=2.0) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except Exception as exc:
+            self.log.warning(f"Could not sync starting position from orchestrator: {exc}")
+            return
+
+        try:
+            qty = _extract_signed_position_qty(
+                payload.get("account_state", {}),
+                self._config.instrument_id,
+            )
+        except (TypeError, ValueError) as exc:
+            self.log.warning(f"Invalid orchestrator account position: {exc}")
+            return
+
+        self._signed_position_qty = 0.0 if abs(qty) < 1e-12 else qty
+        if self._signed_position_qty != 0.0:
+            self.log.info(
+                f"Restored starting position from orchestrator: {self._signed_position_qty:.8f}"
+            )
 
     # ------------------------------------------------------------------
     # Data handlers
