@@ -144,6 +144,21 @@ class PaperExecutionEngine:
         self._update_metrics(strategy_id, account, instrument_id="")
         return account
 
+    def reset_account(self, strategy_id: str, initial_balance: float) -> PaperAccount:
+        """Reset a paper account to its configured starting balance."""
+        account = PaperAccount(
+            initial_balance=initial_balance,
+            balance=initial_balance,
+            realized_pnl=0.0,
+            position_qty=0.0,
+            avg_price=0.0,
+            cumulative_fees=0.0,
+        )
+        self._accounts[strategy_id] = account
+        self._save_account(strategy_id, account)
+        self._update_metrics(strategy_id, account, instrument_id="")
+        return account
+
     async def execute_order(
         self,
         *,

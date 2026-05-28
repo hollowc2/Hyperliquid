@@ -9,8 +9,9 @@ Key behaviours:
   - On subscribe: immediately requests snapshot for consistent initial state
   - HWM set to 1000 (ZMQ drops oldest on overflow)
 
-Data reconstruction mirrors HyperliquidLiveMarketDataClient handlers exactly.
-ts_init comes from orchestrator (ts_ns in frame) — orchestrator is time source of truth.
+Data reconstruction mirrors HyperliquidLiveMarketDataClient handlers closely.
+For bars, ts_init is the candle open time so strategies can distinguish startup
+warmup and the current partial candle from newly opened live candles.
 """
 
 import asyncio
@@ -41,6 +42,7 @@ from nautilus_trader.model.identifiers import InstrumentId, Symbol, TradeId
 from nautilus_trader.model.objects import Price, Quantity
 
 from hl_engine.adapters.hyperliquid.constants import HYPERLIQUID_VENUE
+from hl_engine.adapters.hyperliquid.constants import BAR_INTERVAL_MAP
 from hl_engine.adapters.hyperliquid.providers import HyperliquidInstrumentProvider
 from hl_engine.data.types import FundingRateData, LiquidationData, OpenInterestData
 from hl_engine.transport.serialization import unwrap
@@ -147,7 +149,6 @@ class ZmqLiveDataClient(LiveMarketDataClient):
 
     async def _subscribe_order_book_deltas(self, command) -> None:
         instrument_id = command.instrument_id
-        coin = _instrument_id_to_coin(instrument_id)
         topic = f"orderbook.{instrument_id}".encode()
         self._zmq_sock.setsockopt(zmq.SUBSCRIBE, topic)
         self._subscribed_instruments.add(str(instrument_id))
@@ -165,8 +166,8 @@ class ZmqLiveDataClient(LiveMarketDataClient):
     async def _subscribe_bars(self, command) -> None:
         bar_type: BarType = command.bar_type
         instrument_id = bar_type.instrument_id
-        coin = _instrument_id_to_coin(instrument_id)
-        topic = f"bar.{instrument_id}.1m".encode()
+        interval = _bar_type_to_interval(bar_type)
+        topic = f"bar.{instrument_id}.{interval}".encode()
         self._zmq_sock.setsockopt(zmq.SUBSCRIBE, topic)
         self._subscribed_instruments.add(str(instrument_id))
         self._log.info(f"Subscribed ZMQ: {topic.decode()}")
@@ -194,11 +195,12 @@ class ZmqLiveDataClient(LiveMarketDataClient):
         bar_type: BarType = request.bar_type
         limit: int = int(request.limit or 200)
         coin = _instrument_id_to_coin(bar_type.instrument_id)
+        interval = _bar_type_to_interval(bar_type)
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(
                     f"{self._rest_url}/bars",
-                    params={"coin": coin, "interval": "1m", "limit": limit},
+                    params={"coin": coin, "interval": interval, "limit": limit},
                 ) as resp:
                     resp.raise_for_status()
                     data = await resp.json()
@@ -478,6 +480,7 @@ class ZmqLiveDataClient(LiveMarketDataClient):
 
     def _parse_candle(self, data: dict, bar_type: BarType, instrument, ts_ns: int) -> Bar:
         ts_event = int(data.get("T", data.get("t", 0))) * 1_000_000
+        ts_init = _candle_open_ts_ns(data, fallback_ts_ns=ts_ns)
         pp = instrument.price_precision
         sp = instrument.size_precision
         return Bar(
@@ -488,7 +491,7 @@ class ZmqLiveDataClient(LiveMarketDataClient):
             close=Price(float(data["c"]), pp),
             volume=Quantity(float(data["v"]), sp),
             ts_event=ts_event,
-            ts_init=ts_ns,
+            ts_init=ts_init,
         )
 
 
@@ -498,6 +501,13 @@ class ZmqLiveDataClient(LiveMarketDataClient):
 
 def _instrument_id_to_coin(instrument_id: InstrumentId) -> str:
     return instrument_id.symbol.value.split("-")[0]
+
+
+def _candle_open_ts_ns(data: dict, fallback_ts_ns: int) -> int:
+    try:
+        return int(data["t"]) * 1_000_000
+    except (KeyError, TypeError, ValueError):
+        return fallback_ts_ns
 
 
 def _interval_to_bar_type(instrument_id: InstrumentId, interval: str) -> BarType:
@@ -516,3 +526,15 @@ def _interval_to_bar_type(instrument_id: InstrumentId, interval: str) -> BarType
     step, agg = _map.get(interval, (1, BarAggregation.MINUTE))
     spec = BarSpecification(step, agg, PriceType.LAST)
     return BarType(instrument_id, spec, AggregationSource.EXTERNAL)
+
+
+def _bar_type_to_interval(bar_type: BarType) -> str:
+    step = bar_type.spec.step
+    aggregation = bar_type.spec.aggregation
+    if aggregation == BarAggregation.MINUTE:
+        return BAR_INTERVAL_MAP.get(step, "1m")
+    if aggregation == BarAggregation.HOUR:
+        return BAR_INTERVAL_MAP.get(step * 60, "1h")
+    if aggregation == BarAggregation.DAY:
+        return "1d"
+    return "1m"

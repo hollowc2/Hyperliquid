@@ -125,21 +125,34 @@ def _add_ob_data_chunked(
     return total
 
 
-def _bar_parquet_files(catalog_path: Path, instrument_id: str) -> list[Path]:
-    """Return all 1-minute bar Parquet files sorted by filename (chronological)."""
-    bar_dir = catalog_path / "data" / "bar" / f"{instrument_id}-1-MINUTE-LAST-EXTERNAL"
+def _bar_type_label(bar_minutes: int) -> str:
+    """Return the Nautilus catalog label for minute-based external bars."""
+    if bar_minutes <= 0:
+        raise ValueError(f"bar_minutes must be positive: {bar_minutes}")
+    return f"{bar_minutes}-MINUTE"
+
+
+def _bar_parquet_files(catalog_path: Path, instrument_id: str, bar_minutes: int = 1) -> list[Path]:
+    """Return bar Parquet files sorted by filename (chronological)."""
+    bar_dir = catalog_path / "data" / "bar" / f"{instrument_id}-{_bar_type_label(bar_minutes)}-LAST-EXTERNAL"
     if not bar_dir.exists():
         return []
     return sorted(bar_dir.glob("*.parquet"))
 
 
-def _load_bars_direct(catalog: "ParquetDataCatalog", instrument_id_str: str, start_ns: int, end_ns: int) -> list[Bar]:
+def _load_bars_direct(
+    catalog: "ParquetDataCatalog",
+    instrument_id_str: str,
+    start_ns: int,
+    end_ns: int,
+    bar_minutes: int = 1,
+) -> list[Bar]:
     """
-    Load 1-minute bars via the NT catalog, then deduplicate by ts_event.
+    Load bars via the NT catalog, then deduplicate by ts_event.
     Dedup is needed because the catalog accumulates duplicate rows from repeated
     flush cycles before compaction.
     """
-    bar_type_str = f"{instrument_id_str}-1-MINUTE-LAST-EXTERNAL"
+    bar_type_str = f"{instrument_id_str}-{_bar_type_label(bar_minutes)}-LAST-EXTERNAL"
     try:
         bars: list[Bar] = catalog.bars([bar_type_str], start=start_ns, end=end_ns)
     except Exception:
@@ -304,9 +317,9 @@ def _resample_bars(bars_1m, bar_minutes: int, instrument):
     return out
 
 
-def _catalog_date_range(catalog_path: Path, instrument_id: str) -> tuple[str, str]:
+def _catalog_date_range(catalog_path: Path, instrument_id: str, bar_minutes: int = 1) -> tuple[str, str]:
     """Return (first_date, last_date) strings from bar parquet filenames, or defaults."""
-    files = _bar_parquet_files(catalog_path, instrument_id)
+    files = _bar_parquet_files(catalog_path, instrument_id, bar_minutes)
     if not files:
         return ("2026-04-12", "2026-04-19")
     # Compacted files are named YYYY-MM-DD.parquet
@@ -319,8 +332,6 @@ def _catalog_date_range(catalog_path: Path, instrument_id: str) -> tuple[str, st
 def main() -> None:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(line_buffering=True)
-
-    default_start, default_end = _catalog_date_range(CATALOG_PATH, INSTRUMENT_ID)
 
     parser = argparse.ArgumentParser(description="APEX Trader backtest runner")
     parser.add_argument(
@@ -335,13 +346,13 @@ def main() -> None:
     )
     parser.add_argument(
         "--start",
-        default=os.getenv("HL_START_DATE", default_start),
-        help=f"Start date/datetime YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS (default: {default_start})",
+        default=os.getenv("HL_START_DATE"),
+        help="Start date/datetime YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS (default: catalog first date)",
     )
     parser.add_argument(
         "--end",
-        default=os.getenv("HL_END_DATE", default_end),
-        help=f"End date/datetime YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS (default: {default_end})",
+        default=os.getenv("HL_END_DATE"),
+        help="End date/datetime YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS (default: catalog last date)",
     )
     parser.add_argument(
         "--bar-minutes",
@@ -393,6 +404,16 @@ def main() -> None:
         default=1000.0,
         help="Starting USDC balance for trend strategy research (default: 1000).",
     )
+    parser.add_argument(
+        "--trend-source-bar-minutes",
+        type=int,
+        choices=[1, 3, 5, 15],
+        default=1,
+        help=(
+            "Source bar interval for trend strategy research (default: 1). "
+            "Use 15 with a catalog built from HL_INTERVAL=15m for deeper REST history."
+        ),
+    )
     args = parser.parse_args()
 
     catalog = ParquetDataCatalog(str(CATALOG_PATH))
@@ -400,10 +421,16 @@ def main() -> None:
 
     needs_apex_data = args.strategy == "apex"
     needs_ob_data = args.strategy in {"apex", "vclimax"}
+    source_bar_minutes = args.trend_source_bar_minutes if args.strategy == "trend" else 1
+    default_start, default_end = _catalog_date_range(CATALOG_PATH, INSTRUMENT_ID, source_bar_minutes)
+    if args.start is None:
+        args.start = default_start
+    if args.end is None:
+        args.end = default_end
 
     has_ob = needs_ob_data and args.with_ob and len(_ob_parquet_files(CATALOG_PATH, INSTRUMENT_ID)) > 0
     has_trades = needs_apex_data and _catalog_has(catalog, TradeTick, instrument_id)
-    has_bars = len(_bar_parquet_files(CATALOG_PATH, INSTRUMENT_ID)) > 0
+    has_bars = len(_bar_parquet_files(CATALOG_PATH, INSTRUMENT_ID, source_bar_minutes)) > 0
 
     start_ns = _parse_ts(args.start)
     end_ns = _parse_ts(args.end)
@@ -437,7 +464,9 @@ def main() -> None:
     if not has_bars:
         print(
             "\nNo bar data found in catalog. Run build_historical_catalog.py first.\n"
-            "  python build_historical_catalog.py"
+            "  python build_historical_catalog.py\n"
+            "For trend research with coarser REST candles, set HL_INTERVAL=15m and "
+            "rerun with --trend-source-bar-minutes 15."
         )
         return
 
@@ -479,18 +508,19 @@ def main() -> None:
         else:
             print("  TradeTick      : 0 ticks loaded for selected window")
 
-    bar_data_1m = _load_bars_direct(catalog, INSTRUMENT_ID, start_ns, end_ns)
-    print(f"  Bars (1m)      : {len(bar_data_1m)} bars loaded")
+    source_bar_data = _load_bars_direct(catalog, INSTRUMENT_ID, start_ns, end_ns, source_bar_minutes)
+    print(f"  Bars ({source_bar_minutes}m)      : {len(source_bar_data)} bars loaded")
 
     # For the MA strategy with bar_minutes > 1, resample before adding to engine.
-    # The v-climax and trend strategies consume 1m bars and aggregate internally.
+    # The v-climax strategy consumes 1m bars; trend can consume 1m/3m/5m/15m
+    # bars and aggregate internally to 15m/1h/4h/1d.
     bar_minutes = args.bar_minutes if args.strategy == "ma" else 1
     if bar_minutes > 1:
         inst = catalog.instruments(instrument_ids=[INSTRUMENT_ID])[0]
-        bar_data = _resample_bars(bar_data_1m, bar_minutes, inst)
-        print(f"  Resampled {len(bar_data_1m)} 1-min bars → {len(bar_data)} {bar_minutes}-min bars")
+        bar_data = _resample_bars(source_bar_data, bar_minutes, inst)
+        print(f"  Resampled {len(source_bar_data)} 1-min bars → {len(bar_data)} {bar_minutes}-min bars")
     else:
-        bar_data = bar_data_1m
+        bar_data = source_bar_data
     engine.add_data(bar_data)
 
     # --- Custom data (funding, OI, liquidations) ---
@@ -528,6 +558,7 @@ def main() -> None:
         trend_kwargs = {
             "instrument_id": INSTRUMENT_ID,
             "initial_balance_usdc": args.trend_initial_balance,
+            "source_bar_minutes": args.trend_source_bar_minutes,
         }
         overrides = {
             "fast_ema_period": args.trend_fast_ema_period,

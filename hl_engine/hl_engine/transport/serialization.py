@@ -19,7 +19,6 @@ Types:
 """
 
 import time
-from typing import Any
 
 import msgspec.msgpack
 
@@ -71,8 +70,9 @@ def wrap_trade(seq: int, coin: str, trade: dict) -> tuple[bytes, bytes]:
 
 
 def wrap_candle(seq: int, coin: str, candle: dict) -> tuple[bytes, bytes]:
-    """Package a 1m candle for ZMQ publish."""
-    topic = f"bar.{coin}-USD.HYPERLIQUID.1m".encode()
+    """Package a candle for ZMQ publish."""
+    interval = str(candle.get("i", "1m"))
+    topic = f"bar.{coin}-USD.HYPERLIQUID.{interval}".encode()
     payload = msgspec.msgpack.encode({
         "seq": seq,
         "ts_ns": time.time_ns(),

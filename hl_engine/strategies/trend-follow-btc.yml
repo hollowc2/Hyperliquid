@@ -4,7 +4,7 @@ config_class: hl_engine.config.trend_follow_config.TrendFollowConfig
 instrument_id: BTC-USD.HYPERLIQUID
 parameters:
   initial_balance_usdc: 1000.0
-  source_bar_minutes: 1
+  source_bar_minutes: 15
   trade_bar_minutes: 60
   confirmation_timeframes:
     - 4h

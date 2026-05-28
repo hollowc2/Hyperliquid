@@ -8,7 +8,7 @@ from hl_engine.strategy.trend_follow_strategy import (
 )
 
 
-def _source_bar(open_, high, low, close, volume=1.0, ts=0):
+def _source_bar(open_, high, low, close, volume=1.0, ts=0, ts_init=None):
     return SimpleNamespace(
         open=open_,
         high=high,
@@ -16,6 +16,7 @@ def _source_bar(open_, high, low, close, volume=1.0, ts=0):
         close=close,
         volume=volume,
         ts_event=ts,
+        ts_init=ts if ts_init is None else ts_init,
     )
 
 
@@ -157,3 +158,19 @@ def test_risk_sized_quantity_rounds_down_and_rejects_zero_atr_distance():
         )
         == 0.0
     )
+
+
+def test_live_historical_warmup_detection_uses_ts_init_not_event_time():
+    config = TrendFollowConfig()
+    strategy = _strategy(config)
+    strategy._skip_historical_warmup_orders = True
+    strategy._live_started_ns = 1_000_000_000_000
+
+    assert strategy._is_historical_warmup_bar(
+        _source_bar(100, 101, 99, 100, ts=990_000_000_000)
+    )
+
+    live_bar = _source_bar(100, 101, 99, 100, ts=990_000_000_000)
+    live_bar.ts_init = strategy._live_started_ns + 1
+
+    assert not strategy._is_historical_warmup_bar(live_bar)

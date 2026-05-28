@@ -471,6 +471,33 @@ async def clear_paper_position(strategy_id: str):
     }
 
 
+@app.post("/admin/strategies/{strategy_id}/reset-paper-account")
+async def reset_paper_account(strategy_id: str):
+    """Reset paper balance, PnL, fees, exposure, and risk to configured defaults."""
+    spec = strategy_registry.get(strategy_id) if strategy_registry else None
+    if spec is None:
+        raise HTTPException(status_code=404, detail=f"Strategy {strategy_id!r} not found")
+    if paper_execution is None or risk_manager is None or persistence is None:
+        raise HTTPException(status_code=503, detail="Paper execution is not initialised")
+
+    account = paper_execution.reset_account(strategy_id, _strategy_initial_balance(strategy_id))
+    await risk_manager.set_notional(strategy_id, 0.0)
+    persistence.save_risk_snapshot(strategy_id, 0.0)
+    await persistence.flush()
+    return {
+        "status": "reset",
+        "strategy_id": strategy_id,
+        "paper": {
+            "initial_balance": account.initial_balance,
+            "balance": account.balance,
+            "realized_pnl": account.realized_pnl,
+            "position_qty": account.position_qty,
+            "avg_price": account.avg_price,
+            "cumulative_fees": account.cumulative_fees,
+        },
+    }
+
+
 @app.post("/strategies/{strategy_id}/register")
 async def register_strategy(strategy_id: str, req: RegisterRequest):
     """Called by strategy container on connect. Detects restarts via instance_id."""

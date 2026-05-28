@@ -9,7 +9,7 @@ for subscriber resync via GET /snapshot/{instrument_id}.
 Publishes on ZMQ PUB socket with topics:
   b"orderbook.{instrument_id}"   OrderBookDelta batch
   b"trades.{instrument_id}"      TradeTick
-  b"bar.{instrument_id}.1m"      Bar (1m candle)
+  b"bar.{instrument_id}.{interval}" Bar candle
   b"funding.{instrument_id}"     FundingRateData + OI
   b"liquidation.{instrument_id}" LiquidationData
   b"heartbeat"                   Liveness pulse every 500ms
@@ -18,6 +18,7 @@ Publishes on ZMQ PUB socket with topics:
 import asyncio
 import json
 import logging
+import os
 import time
 from typing import Optional
 
@@ -77,12 +78,14 @@ class OrchestratorDataFeed:
         ws_url: str = HL_WS_URL,
         info_url: str = HL_BASE_URL + HL_INFO_ENDPOINT,
         wallet_address: Optional[str] = None,
+        candle_intervals: Optional[list[str]] = None,
     ) -> None:
         self._coins = list(coins)
         self._zmq_pub = zmq_pub
         self._ws_url = ws_url
         self._info_url = info_url
         self._wallet_address = wallet_address
+        self._candle_intervals = candle_intervals or _default_candle_intervals()
 
         # Instrument metadata: coin → {price_precision, size_precision, szDecimals}
         self._instruments: dict[str, dict] = {}
@@ -197,10 +200,15 @@ class OrchestratorDataFeed:
             for sub_type, extra in [
                 (WS_TYPE_L2_BOOK, {}),
                 (WS_TYPE_TRADES, {}),
-                (WS_TYPE_CANDLE, {"interval": "1m"}),
                 (WS_TYPE_ACTIVE_ASSET_CTX, {}),
             ]:
                 msg = {"method": "subscribe", "subscription": {"type": sub_type, "coin": coin, **extra}}
+                await ws.send(json.dumps(msg))
+            for interval in self._candle_intervals:
+                msg = {
+                    "method": "subscribe",
+                    "subscription": {"type": WS_TYPE_CANDLE, "coin": coin, "interval": interval},
+                }
                 await ws.send(json.dumps(msg))
 
         if self._wallet_address:
@@ -208,7 +216,10 @@ class OrchestratorDataFeed:
                 "method": "subscribe",
                 "subscription": {"type": WS_TYPE_WEB_DATA2, "user": self._wallet_address},
             }))
-        log.info(f"Data feed subscribed to {list(self._instruments.keys())}")
+        log.info(
+            f"Data feed subscribed to {list(self._instruments.keys())} "
+            f"candles={self._candle_intervals}"
+        )
 
     async def _ping_loop(self) -> None:
         while self._running:
@@ -351,7 +362,8 @@ class OrchestratorDataFeed:
         coin = data.get("s", "")
         if coin not in self._instruments:
             return
-        seq = self._next_seq(f"bar.{coin}")
+        interval = str(data.get("i", "1m"))
+        seq = self._next_seq(f"bar.{coin}.{interval}")
         topic, payload = wrap_candle(seq, coin, data)
         await self._zmq_pub.send_multipart([topic, payload])
 
@@ -391,3 +403,13 @@ class OrchestratorDataFeed:
     def _next_seq(self, key: str) -> int:
         self._seq[key] = self._seq.get(key, 0) + 1
         return self._seq[key]
+
+
+def _default_candle_intervals() -> list[str]:
+    raw = os.getenv("HL_CANDLE_INTERVALS", "1m,15m")
+    intervals: list[str] = []
+    for item in raw.split(","):
+        interval = item.strip()
+        if interval and interval not in intervals:
+            intervals.append(interval)
+    return intervals or ["1m"]

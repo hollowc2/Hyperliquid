@@ -54,9 +54,10 @@ class TrendFollowStrategy(Strategy):
     """
     Closed-1h EMA trend-following strategy with 4h/1d confirmation.
 
-    The live feed provides 1-minute bars. This strategy aggregates closed 15m,
-    1h, 4h, and 1d bars internally, evaluates entries only on a closed 1h bar,
-    and manages exits with an ATR trailing stop plus regime invalidation.
+    The live feed provides configurable source bars. This strategy aggregates
+    closed 15m, 1h, 4h, and 1d bars internally, evaluates entries only on a
+    closed 1h bar, and manages exits with an ATR trailing stop plus regime
+    invalidation.
     """
 
     TIMEFRAMES = {"15m": 15, "1h": 60, "4h": 240, "1d": 1440}
@@ -75,6 +76,8 @@ class TrendFollowStrategy(Strategy):
         self._stop_price: Optional[float] = None
         self._last_signal_reason = "warming_up"
         self._last_state_push_ns = 0
+        self._live_started_ns = 0
+        self._skip_historical_warmup_orders = False
 
     def on_start(self) -> None:
         self._instrument_id = InstrumentId.from_str(self._config.instrument_id)
@@ -83,6 +86,8 @@ class TrendFollowStrategy(Strategy):
             self.log.error(f"Instrument not found in cache: {self._instrument_id}")
             return
 
+        self._live_started_ns = time.time_ns()
+        self._skip_historical_warmup_orders = bool(os.getenv("ORCHESTRATOR_REST_URL"))
         bar_type = BarType.from_str(
             f"{self._config.instrument_id}-{self._config.source_bar_minutes}-MINUTE-LAST-EXTERNAL"
         )
@@ -105,13 +110,15 @@ class TrendFollowStrategy(Strategy):
         self.log.info("TrendFollowStrategy stopped")
 
     def on_bar(self, bar: Bar) -> None:
+        is_historical_warmup = self._is_historical_warmup_bar(bar)
         closed = self._add_source_bar_to_timeframes(bar)
-        self._check_intrabar_stop(bar)
+        if not is_historical_warmup:
+            self._check_intrabar_stop(bar)
         for name, trend_bar in closed:
             self._update_timeframe_indicators(name)
-            if name == self._trade_timeframe_name():
+            if name == self._trade_timeframe_name() and not is_historical_warmup:
                 self._on_trade_bar(trend_bar)
-        if closed:
+        if closed and not is_historical_warmup:
             self._push_state_snapshot(min_interval_secs=5.0)
 
     def on_order_filled(self, event) -> None:
@@ -414,6 +421,13 @@ class TrendFollowStrategy(Strategy):
 
     def _trade_timeframe_name(self) -> str:
         return self.timeframe_name_for_minutes(self._config.trade_bar_minutes)
+
+    def _is_historical_warmup_bar(self, bar: Bar) -> bool:
+        if not self._skip_historical_warmup_orders or self._live_started_ns <= 0:
+            return False
+        # REST warmup bars are injected with ts_init near their historical event
+        # time. Live ZMQ bars use the orchestrator wall clock as ts_init.
+        return int(bar.ts_init) < self._live_started_ns - 5_000_000_000
 
     @classmethod
     def timeframe_name_for_minutes(cls, minutes: int) -> str:

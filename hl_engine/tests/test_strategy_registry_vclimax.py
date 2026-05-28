@@ -72,6 +72,7 @@ def test_strategy_registry_loads_trend_follow_btc_config():
     assert spec.config_class_path == "hl_engine.config.trend_follow_config.TrendFollowConfig"
     assert spec.instrument_id == "BTC-USD.HYPERLIQUID"
     assert spec.parameters["initial_balance_usdc"] == 1000.0
+    assert spec.parameters["source_bar_minutes"] == 15
     assert spec.parameters["confirmation_timeframes"] == ["4h", "1d"]
     assert spec.risk.max_position_usd == 1000.0
     assert spec.docker.container_name == "strategy-trend-follow-btc"
@@ -84,3 +85,4 @@ def test_strategy_registry_loads_trend_follow_btc_config():
 
     assert config.instrument_id == "BTC-USD.HYPERLIQUID"
     assert config.initial_balance_usdc == 1000.0
+    assert config.source_bar_minutes == 15
