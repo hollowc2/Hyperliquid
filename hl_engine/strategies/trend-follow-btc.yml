@@ -1,0 +1,29 @@
+id: trend-follow-btc
+class: hl_engine.strategy.trend_follow_strategy.TrendFollowStrategy
+config_class: hl_engine.config.trend_follow_config.TrendFollowConfig
+instrument_id: BTC-USD.HYPERLIQUID
+parameters:
+  initial_balance_usdc: 1000.0
+  source_bar_minutes: 1
+  trade_bar_minutes: 60
+  confirmation_timeframes:
+    - 4h
+    - 1d
+  entry_filter_timeframe: 15m
+  use_entry_filter: true
+  strict_confirmation: true
+  fast_ema_period: 3
+  slow_ema_period: 8
+  atr_period: 14
+  atr_stop_multiple: 3.0
+  risk_fraction: 0.005
+  allow_long: true
+  allow_short: true
+risk:
+  max_position_usd: 1000
+  max_leverage: 1.0
+rate_limit:
+  max_orders_per_second: 2
+docker:
+  image: hl-engine:latest
+  container_name: strategy-trend-follow-btc

@@ -1,5 +1,6 @@
 from hl_engine.config.apex_config import ApexStrategyConfig
 from hl_engine.config.ma_config import MaCrossConfig
+from hl_engine.config.trend_follow_config import TrendFollowConfig
 from hl_engine.config.v_climax_reversal_config import VClimaxReversalConfig
 from hl_engine.orchestrator.strategy_registry import StrategyRegistry
 from hl_engine.run_strategy import _build_strategy_config
@@ -58,3 +59,28 @@ def test_apex_and_ma_configs_use_1000_paper_initial_balance():
 
     assert apex_config.initial_balance_usdc == 1000.0
     assert ma_config.initial_balance_usdc == 1000.0
+
+
+def test_strategy_registry_loads_trend_follow_btc_config():
+    registry = StrategyRegistry("strategies")
+    registry.load()
+
+    spec = registry.get("trend-follow-btc")
+
+    assert spec is not None
+    assert spec.class_path == "hl_engine.strategy.trend_follow_strategy.TrendFollowStrategy"
+    assert spec.config_class_path == "hl_engine.config.trend_follow_config.TrendFollowConfig"
+    assert spec.instrument_id == "BTC-USD.HYPERLIQUID"
+    assert spec.parameters["initial_balance_usdc"] == 1000.0
+    assert spec.parameters["confirmation_timeframes"] == ["4h", "1d"]
+    assert spec.risk.max_position_usd == 1000.0
+    assert spec.docker.container_name == "strategy-trend-follow-btc"
+
+    config = _build_strategy_config(
+        TrendFollowConfig,
+        spec.parameters,
+        spec.instrument_id,
+    )
+
+    assert config.instrument_id == "BTC-USD.HYPERLIQUID"
+    assert config.initial_balance_usdc == 1000.0

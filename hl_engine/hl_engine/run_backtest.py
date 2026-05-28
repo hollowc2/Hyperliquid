@@ -20,7 +20,6 @@ Usage:
 
 import argparse
 import os
-import struct
 import sys
 from decimal import Decimal
 from pathlib import Path
@@ -30,10 +29,10 @@ import pyarrow.parquet as pq
 from nautilus_trader.backtest.engine import BacktestEngine
 from nautilus_trader.config import BacktestEngineConfig
 from nautilus_trader.model.currencies import USDC
-from nautilus_trader.model.data import Bar, BarSpecification, BarType, CustomData, DataType, OrderBookDelta, TradeTick
-from nautilus_trader.model.enums import AccountType, AggregationSource, BarAggregation, BookType, OmsType, PriceType
+from nautilus_trader.model.data import Bar, CustomData, DataType, OrderBookDelta, TradeTick
+from nautilus_trader.model.enums import AccountType, BookType, OmsType
 from nautilus_trader.model.identifiers import ClientId, InstrumentId, Venue
-from nautilus_trader.model.objects import Money, Price, Quantity
+from nautilus_trader.model.objects import Money
 from nautilus_trader.persistence.catalog import ParquetDataCatalog
 
 from hl_engine.config.apex_config import ApexConfig, ApexStrategyConfig, HyperliquidConfig
@@ -326,11 +325,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="APEX Trader backtest runner")
     parser.add_argument(
         "--strategy",
-        choices=["apex", "ma", "vclimax"],
+        choices=["apex", "ma", "vclimax", "trend"],
         default="apex",
         help=(
             "Strategy to run: 'apex' (full ApexStrategy), "
-            "'ma' (MA crossover smoke test), or 'vclimax' (V-climax reversal)"
+            "'ma' (MA crossover smoke test), 'vclimax' (V-climax reversal), "
+            "or 'trend' (multi-timeframe EMA trend follow)"
         ),
     )
     parser.add_argument(
@@ -377,6 +377,21 @@ def main() -> None:
         type=float,
         default=None,
         help="Override v-climax volume multiple threshold.",
+    )
+    parser.add_argument("--trend-fast-ema-period", type=int, default=None)
+    parser.add_argument("--trend-slow-ema-period", type=int, default=None)
+    parser.add_argument("--trend-atr-period", type=int, default=None)
+    parser.add_argument("--trend-atr-stop-multiple", type=float, default=None)
+    parser.add_argument("--trend-risk-fraction", type=float, default=None)
+    parser.add_argument("--trend-strict-confirmation", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--trend-use-entry-filter", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--trend-allow-long", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--trend-allow-short", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument(
+        "--trend-initial-balance",
+        type=float,
+        default=1000.0,
+        help="Starting USDC balance for trend strategy research (default: 1000).",
     )
     args = parser.parse_args()
 
@@ -430,12 +445,13 @@ def main() -> None:
     engine = BacktestEngine(config=BacktestEngineConfig())
 
     # --- Venue ---
+    starting_balance = args.trend_initial_balance if args.strategy == "trend" else STARTING_BALANCE_USDC
     engine.add_venue(
         venue=Venue("HYPERLIQUID"),
         oms_type=OmsType.NETTING,
         account_type=AccountType.MARGIN,
         base_currency=USDC,
-        starting_balances=[Money(STARTING_BALANCE_USDC, USDC)],
+        starting_balances=[Money(starting_balance, USDC)],
         book_type=BookType.L2_MBP if has_ob else BookType.L1_MBP,
         default_leverage=Decimal("20"),  # HL BTC default; affects margin math not risk limits
     )
@@ -467,7 +483,7 @@ def main() -> None:
     print(f"  Bars (1m)      : {len(bar_data_1m)} bars loaded")
 
     # For the MA strategy with bar_minutes > 1, resample before adding to engine.
-    # The v-climax strategy consumes 1m bars and aggregates internally.
+    # The v-climax and trend strategies consume 1m bars and aggregate internally.
     bar_minutes = args.bar_minutes if args.strategy == "ma" else 1
     if bar_minutes > 1:
         inst = catalog.instruments(instrument_ids=[INSTRUMENT_ID])[0]
@@ -505,6 +521,27 @@ def main() -> None:
         if args.vclimax_volume_multiple is not None:
             vclimax_kwargs["volume_multiple"] = args.vclimax_volume_multiple
         strategy = VClimaxReversalStrategy(config=VClimaxReversalConfig(**vclimax_kwargs))
+    elif args.strategy == "trend":
+        from hl_engine.config.trend_follow_config import TrendFollowConfig
+        from hl_engine.strategy.trend_follow_strategy import TrendFollowStrategy
+
+        trend_kwargs = {
+            "instrument_id": INSTRUMENT_ID,
+            "initial_balance_usdc": args.trend_initial_balance,
+        }
+        overrides = {
+            "fast_ema_period": args.trend_fast_ema_period,
+            "slow_ema_period": args.trend_slow_ema_period,
+            "atr_period": args.trend_atr_period,
+            "atr_stop_multiple": args.trend_atr_stop_multiple,
+            "risk_fraction": args.trend_risk_fraction,
+            "strict_confirmation": args.trend_strict_confirmation,
+            "use_entry_filter": args.trend_use_entry_filter,
+            "allow_long": args.trend_allow_long,
+            "allow_short": args.trend_allow_short,
+        }
+        trend_kwargs.update({key: value for key, value in overrides.items() if value is not None})
+        strategy = TrendFollowStrategy(config=TrendFollowConfig(**trend_kwargs))
     else:
         # Build minimal ApexConfig (no real credentials needed for backtesting)
         apex_config = ApexConfig(
