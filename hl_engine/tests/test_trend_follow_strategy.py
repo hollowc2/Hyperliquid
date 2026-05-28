@@ -160,6 +160,39 @@ def test_risk_sized_quantity_rounds_down_and_rejects_zero_atr_distance():
     )
 
 
+def test_capped_risk_sized_quantity_respects_max_notional():
+    instrument = SimpleNamespace(
+        size_increment=0.001,
+        size_precision=3,
+        min_quantity=0.001,
+    )
+
+    qty = TrendFollowStrategy.capped_risk_sized_quantity(
+        equity=1000.0,
+        risk_fraction=0.005,
+        entry_price=73_900.0,
+        stop_price=74_000.0,
+        max_position_usd=1000.0,
+        instrument=instrument,
+    )
+
+    assert qty == 0.013
+    assert qty * 73_900.0 <= 1000.0
+
+
+def test_extract_orchestrator_position_prefers_paper_state():
+    strategy = _strategy(TrendFollowConfig())
+
+    position = strategy._extract_orchestrator_position(
+        {
+            "paper": {"position_qty": "-0.01254", "avg_price": "73907"},
+            "assetPositions": [],
+        }
+    )
+
+    assert position == {"signed_qty": -0.01254, "avg_px": 73907.0}
+
+
 def test_live_historical_warmup_detection_uses_ts_init_not_event_time():
     config = TrendFollowConfig()
     strategy = _strategy(config)

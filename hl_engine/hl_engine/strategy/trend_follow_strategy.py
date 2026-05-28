@@ -7,10 +7,12 @@ from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
+import json
 from math import floor
 import os
 import time
 from typing import Optional
+from urllib.request import urlopen
 
 from nautilus_trader.model.data import Bar, BarType
 from nautilus_trader.model.enums import OrderSide, TimeInForce
@@ -88,6 +90,7 @@ class TrendFollowStrategy(Strategy):
 
         self._live_started_ns = time.time_ns()
         self._skip_historical_warmup_orders = bool(os.getenv("ORCHESTRATOR_REST_URL"))
+        self._sync_position_from_orchestrator()
         bar_type = BarType.from_str(
             f"{self._config.instrument_id}-{self._config.source_bar_minutes}-MINUTE-LAST-EXTERNAL"
         )
@@ -291,9 +294,61 @@ class TrendFollowStrategy(Strategy):
         distance = abs(entry_price - stop_price)
         if entry_price <= 0.0 or distance <= 0.0:
             return 0.0
-        equity = self._account_equity()
-        raw_qty = equity * self._config.risk_fraction / distance
-        return self._round_quantity_down(raw_qty, self._instrument)
+        return self.capped_risk_sized_quantity(
+            equity=self._account_equity(),
+            risk_fraction=self._config.risk_fraction,
+            entry_price=entry_price,
+            stop_price=stop_price,
+            max_position_usd=self._config.max_position_usd,
+            instrument=self._instrument,
+        )
+
+    def _sync_position_from_orchestrator(self) -> None:
+        base_url = os.getenv("ORCHESTRATOR_REST_URL", "").rstrip("/")
+        strategy_id = os.getenv("STRATEGY_ID", "trend-follow-btc")
+        if not base_url:
+            return
+
+        try:
+            with urlopen(f"{base_url}/account/{strategy_id}", timeout=2.0) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except Exception as exc:
+            self.log.warning(f"Could not sync starting position from orchestrator: {exc}")
+            return
+
+        try:
+            position = self._extract_orchestrator_position(payload.get("account_state", {}))
+        except (TypeError, ValueError) as exc:
+            self.log.warning(f"Invalid orchestrator account position: {exc}")
+            return
+
+        signed_qty = position["signed_qty"]
+        if abs(signed_qty) < 1e-12:
+            return
+        self._active_side = "LONG" if signed_qty > 0 else "SHORT"
+        self._entry_qty = abs(signed_qty)
+        self._entry_price = position.get("avg_px")
+        self.log.info(
+            f"Restored starting trend position from orchestrator: "
+            f"side={self._active_side} qty={self._entry_qty:.8f} avg_px={self._entry_price}"
+        )
+
+    def _extract_orchestrator_position(self, account_state: dict) -> dict:
+        paper_state = account_state.get("paper") or {}
+        if "position_qty" in paper_state:
+            qty = float(paper_state["position_qty"])
+            avg_px = float(paper_state.get("avg_price") or 0.0)
+            return {"signed_qty": qty, "avg_px": avg_px}
+
+        for item in account_state.get("assetPositions") or []:
+            position = item.get("position") or {}
+            if position.get("coin") not in (None, "BTC"):
+                continue
+            qty = float(position.get("szi", 0.0))
+            avg_px = float(position.get("entryPx") or 0.0)
+            return {"signed_qty": qty, "avg_px": avg_px}
+
+        return {"signed_qty": 0.0, "avg_px": 0.0}
 
     def _account_equity(self) -> float:
         if self._instrument_id is not None:
@@ -374,11 +429,12 @@ class TrendFollowStrategy(Strategy):
             import aiohttp
 
             async with aiohttp.ClientSession() as session:
-                await session.post(
+                async with session.post(
                     f"{base_url}/strategies/{strategy_id}/state",
                     json=state,
                     timeout=aiohttp.ClientTimeout(total=2.0),
-                )
+                ) as resp:
+                    await resp.read()
         except Exception as exc:
             self.log.warning(f"Orchestrator state push failed: {exc}")
 
@@ -534,6 +590,22 @@ class TrendFollowStrategy(Strategy):
         if equity <= 0.0 or risk_fraction <= 0.0 or distance <= 0.0:
             return 0.0
         return TrendFollowStrategy._round_quantity_down(equity * risk_fraction / distance, instrument)
+
+    @staticmethod
+    def capped_risk_sized_quantity(
+        equity: float,
+        risk_fraction: float,
+        entry_price: float,
+        stop_price: float,
+        max_position_usd: float,
+        instrument: Instrument,
+    ) -> float:
+        distance = abs(entry_price - stop_price)
+        if equity <= 0.0 or risk_fraction <= 0.0 or entry_price <= 0.0 or distance <= 0.0:
+            return 0.0
+        risk_qty = equity * risk_fraction / distance
+        max_qty = max_position_usd / entry_price if max_position_usd > 0.0 else risk_qty
+        return TrendFollowStrategy._round_quantity_down(min(risk_qty, max_qty), instrument)
 
     @staticmethod
     def _round_quantity_down(raw_qty: float, instrument: Instrument) -> float:

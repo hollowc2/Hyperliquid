@@ -27,3 +27,4 @@ class TrendFollowConfig(StrategyConfig):
     allow_long: bool = True
     allow_short: bool = True
     initial_balance_usdc: float = 1000.0
+    max_position_usd: float = 1000.0

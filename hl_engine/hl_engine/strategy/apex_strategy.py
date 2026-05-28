@@ -686,10 +686,11 @@ class ApexStrategy(Strategy):
         import aiohttp
         try:
             async with aiohttp.ClientSession() as session:
-                await session.post(
+                async with session.post(
                     f"{base_url}/strategies/apex-btc/state",
                     json=state,
                     timeout=aiohttp.ClientTimeout(total=2.0),
-                )
+                ) as resp:
+                    await resp.read()
         except Exception as exc:
             self.log.warning(f"Orchestrator state push failed: {exc}")
