@@ -190,6 +190,23 @@ async def main() -> None:
         wallet_address=wallet_address or None,
     )
 
+    def _paper_mark_price(instrument_id: str) -> float | None:
+        coin = instrument_id.split("-")[0]
+        snap = feed.get_snapshot(coin)
+        if not snap:
+            return None
+        bids = snap.get("bids") or []
+        asks = snap.get("asks") or []
+        if bids and asks:
+            return (float(bids[0][0]) + float(asks[0][0])) / 2.0
+        if bids:
+            return float(bids[0][0])
+        if asks:
+            return float(asks[0][0])
+        return None
+
+    paper_exec.set_mark_price_provider(_paper_mark_price)
+
     if gateway and wallet_address:
         dispatcher = FillDispatcher(
             wallet_address=wallet_address,

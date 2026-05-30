@@ -314,6 +314,25 @@ class PersistenceStore:
             for row in rows
         }
 
+    async def load_paper_fill_aggregates(self) -> dict[str, dict]:
+        """Return aggregate paper fill counters for Prometheus restart hydration."""
+        with sqlite3.connect(self._db_path) as db:
+            rows = db.execute(
+                """SELECT strategy_id,
+                          lower(side) AS side,
+                          COUNT(*) AS fills,
+                          COALESCE(SUM(fee), 0.0) AS fees
+                   FROM paper_fills
+                   GROUP BY strategy_id, lower(side)"""
+            ).fetchall()
+
+        aggregates: dict[str, dict] = {}
+        for strategy_id, side, fills, fees in rows:
+            item = aggregates.setdefault(strategy_id, {"fills": {}, "fees": 0.0})
+            item["fills"][side] = fills
+            item["fees"] += fees
+        return aggregates
+
     async def flush(self) -> None:
         """Wait until all queued writes are committed. Intended for tests and shutdown."""
         await self._write_queue.join()

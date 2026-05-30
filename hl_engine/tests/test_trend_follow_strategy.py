@@ -252,3 +252,55 @@ def test_entry_cooldown_blocks_new_trend_entries(monkeypatch):
 
     assert submitted == []
     assert strategy._last_signal_reason == "entry_cooldown"
+
+
+def test_restored_position_waits_for_protective_stop_until_atr_ready(monkeypatch):
+    config = TrendFollowConfig()
+    strategy = _strategy(config)
+    strategy._active_side = "SHORT"
+    strategy._entry_price = 100.0
+    strategy._entry_qty = 1.0
+    strategy._stop_price = None
+    strategy._restored_position_unmanaged = True
+    strategy._last_signal_reason = ""
+    strategy._bars_since_entry = 0
+    strategy._entry_cooldown_trade_bars = 0
+    pushed = []
+
+    monkeypatch.setattr(strategy, "_trail_stop", lambda bar: None)
+    monkeypatch.setattr(strategy, "_initial_stop", lambda side, entry_price: entry_price)
+    monkeypatch.setattr(strategy, "_push_state_snapshot", lambda min_interval_secs=0.0: pushed.append(min_interval_secs))
+    monkeypatch.setattr(strategy, "_submit_exit", lambda reason: (_ for _ in ()).throw(AssertionError(reason)))
+
+    strategy._on_trade_bar(_trend_bar(100, 101, 99, 100))
+
+    assert strategy._restored_position_unmanaged
+    assert strategy._stop_price is None
+    assert strategy._last_signal_reason == "restored_position_waiting_for_stop"
+    assert pushed == [5.0]
+
+
+def test_restored_position_clears_unmanaged_when_stop_can_be_restored(monkeypatch):
+    config = TrendFollowConfig()
+    strategy = _strategy(config)
+    strategy._active_side = "SHORT"
+    strategy._entry_price = 100.0
+    strategy._entry_qty = 1.0
+    strategy._stop_price = None
+    strategy._restored_position_unmanaged = True
+    strategy._last_signal_reason = ""
+    strategy._bars_since_entry = 0
+    strategy._entry_cooldown_trade_bars = 0
+    strategy._active_entry_order_id = None
+    strategy._active_exit_order_id = None
+
+    monkeypatch.setattr(strategy, "_trail_stop", lambda bar: None)
+    monkeypatch.setattr(strategy, "_initial_stop", lambda side, entry_price: 112.0)
+    monkeypatch.setattr(strategy, "_aligned_signal", lambda: "SHORT")
+    monkeypatch.setattr(strategy, "_check_bar_stop", lambda bar: None)
+
+    strategy._on_trade_bar(_trend_bar(100, 101, 99, 100))
+
+    assert not strategy._restored_position_unmanaged
+    assert strategy._stop_price == 112.0
+    assert strategy._last_signal_reason == "restored_position_stop_restored"

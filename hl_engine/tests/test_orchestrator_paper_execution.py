@@ -81,6 +81,38 @@ async def test_paper_account_buy_sell_persists_and_reconciles(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_paper_account_marks_open_position_to_mid_price(tmp_path):
+    store = PersistenceStore(tmp_path / "orchestrator.db")
+    await store.init()
+    risk = GlobalRiskManager(global_ceiling_usd=10_000)
+    risk.configure_strategy("trend-follow-btc", 1000)
+    socket = FakeSocket()
+    paper = PaperExecutionEngine(store, risk, socket)
+    paper.set_mark_price_provider(lambda instrument_id: 110.0)
+
+    await paper.execute_order(
+        oid=1,
+        strategy_id="trend-follow-btc",
+        client_order_id="buy-1",
+        instrument_id="BTC-USD.HYPERLIQUID",
+        side="BUY",
+        qty=1.0,
+        fill_px=100.0,
+        initial_balance=1000.0,
+    )
+
+    state = paper.account_state("trend-follow-btc", 1000.0, "BTC-USD.HYPERLIQUID")
+    expected_balance = 1000.0 - 100.0 * PAPER_TAKER_FEE
+
+    assert state["paper"]["balance"] == pytest.approx(expected_balance)
+    assert state["paper"]["unrealized_pnl"] == pytest.approx(10.0)
+    assert state["paper"]["equity"] == pytest.approx(expected_balance + 10.0)
+    assert float(state["marginSummary"]["accountValue"]) == pytest.approx(expected_balance + 10.0)
+    assert float(state["assetPositions"][0]["position"]["unrealizedPnl"]) == pytest.approx(10.0)
+    await store.close()
+
+
+@pytest.mark.asyncio
 async def test_reset_paper_account_zeroes_pnl_fees_and_exposure(tmp_path):
     store = PersistenceStore(tmp_path / "orchestrator.db")
     await store.init()

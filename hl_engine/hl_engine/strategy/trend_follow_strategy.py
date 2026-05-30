@@ -82,6 +82,7 @@ class TrendFollowStrategy(Strategy):
         self._skip_historical_warmup_orders = False
         self._bars_since_entry = 0
         self._entry_cooldown_trade_bars = 0
+        self._restored_position_unmanaged = False
 
     def on_start(self) -> None:
         self._instrument_id = InstrumentId.from_str(self._config.instrument_id)
@@ -169,6 +170,13 @@ class TrendFollowStrategy(Strategy):
             self._entry_cooldown_trade_bars -= 1
 
         self._trail_stop(bar)
+        if getattr(self, "_restored_position_unmanaged", False):
+            self._restore_stop_for_existing_position(bar)
+            if self._restored_position_unmanaged:
+                self._last_signal_reason = "restored_position_waiting_for_stop"
+                self._push_state_snapshot(min_interval_secs=5.0)
+                return
+
         signal = self._aligned_signal()
         if self._active_side != "FLAT":
             if self._position_invalidated(signal) and self._bars_since_entry >= self._config.min_hold_trade_bars:
@@ -339,10 +347,34 @@ class TrendFollowStrategy(Strategy):
         self._active_side = "LONG" if signed_qty > 0 else "SHORT"
         self._entry_qty = abs(signed_qty)
         self._entry_price = position.get("avg_px")
+        self._restored_position_unmanaged = True
+        self._last_signal_reason = "restored_position_waiting_for_stop"
         self.log.info(
             f"Restored starting trend position from orchestrator: "
             f"side={self._active_side} qty={self._entry_qty:.8f} avg_px={self._entry_price}"
         )
+
+    def _restore_stop_for_existing_position(self, bar: TrendBar) -> None:
+        if self._active_side == "FLAT" or self._stop_price is not None:
+            self._restored_position_unmanaged = False
+            return
+        reference_price = self._entry_price or bar.close
+        stop = self._initial_stop(self._active_side, reference_price)
+        if stop == reference_price:
+            if self.log:
+                self.log.warning(
+                    "Restored trend position is unmanaged until ATR warmup completes: "
+                    f"side={self._active_side} qty={self._entry_qty}"
+                )
+            return
+        self._stop_price = stop
+        self._restored_position_unmanaged = False
+        self._last_signal_reason = "restored_position_stop_restored"
+        if self.log:
+            self.log.info(
+                f"Restored protective stop for existing trend position: "
+                f"side={self._active_side} stop={self._stop_price:.2f}"
+            )
 
     def _extract_orchestrator_position(self, account_state: dict) -> dict:
         paper_state = account_state.get("paper") or {}
@@ -380,6 +412,8 @@ class TrendFollowStrategy(Strategy):
         return float(open_positions[0].quantity)
 
     def _position_state(self) -> dict:
+        if self._active_side == "FLAT":
+            return {"side": "FLAT", "qty": 0.0, "signed_qty": 0.0}
         if self._instrument_id is None:
             return {"side": self._active_side, "qty": self._entry_qty or 0.0}
         open_positions = self.cache.positions_open(instrument_id=self._instrument_id)
@@ -432,6 +466,7 @@ class TrendFollowStrategy(Strategy):
                 "atr": trade_tf.atr,
                 "position_qty": self._entry_qty or 0.0,
                 "last_signal_reason": self._last_signal_reason,
+                "restored_position_unmanaged": getattr(self, "_restored_position_unmanaged", False),
             },
         }
 
@@ -456,6 +491,7 @@ class TrendFollowStrategy(Strategy):
         self._stop_price = None
         self._bars_since_entry = 0
         self._entry_cooldown_trade_bars = self._config.cooldown_trade_bars_after_exit
+        self._restored_position_unmanaged = False
 
     def _add_source_bar_to_timeframes(self, bar: Bar) -> list[tuple[str, TrendBar]]:
         closed: list[tuple[str, TrendBar]] = []

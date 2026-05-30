@@ -9,6 +9,7 @@ and persists paper account state so strategy restarts can reconcile normally.
 import logging
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import zmq.asyncio
@@ -78,6 +79,11 @@ class PaperExecutionEngine:
         self._risk_manager = risk_manager
         self._zmq_fills_pub = zmq_fills_pub
         self._accounts: dict[str, PaperAccount] = {}
+        self._mark_price_provider: Callable[[str], float | None] | None = None
+
+    def set_mark_price_provider(self, provider: Callable[[str], float | None]) -> None:
+        """Set a best-effort live mark provider used for paper account MTM."""
+        self._mark_price_provider = provider
 
     async def restore_from_db(self) -> None:
         rows = await self._persistence.load_paper_accounts()
@@ -86,6 +92,7 @@ class PaperExecutionEngine:
             self._accounts[strategy_id] = account
             await self._risk_manager.set_notional(strategy_id, abs(account.position_qty * account.avg_price))
             self._update_metrics(strategy_id, account, instrument_id="")
+        await self._restore_paper_metrics()
         log.info("PaperExecutionEngine restored %d accounts from DB", len(rows))
 
     def ensure_account(self, strategy_id: str, initial_balance: float) -> PaperAccount:
@@ -107,30 +114,40 @@ class PaperExecutionEngine:
         signed_qty = qty if is_buy else -qty
         return (account.position_qty > 0) != (signed_qty > 0)
 
-    def account_state(self, strategy_id: str, initial_balance: float) -> dict:
+    def account_state(
+        self,
+        strategy_id: str,
+        initial_balance: float,
+        instrument_id: str = "BTC-USD.HYPERLIQUID",
+    ) -> dict:
         account = self.ensure_account(strategy_id, initial_balance)
+        view = self._account_view(account, instrument_id)
+        self._update_metrics(strategy_id, account, instrument_id=instrument_id)
         return {
             "marginSummary": {
-                "accountValue": str(account.balance),
-                "totalNtlPos": str(abs(account.position_qty * account.avg_price)),
+                "accountValue": str(view["equity"]),
+                "totalNtlPos": str(view["notional"]),
             },
             "assetPositions": [
                 {
                     "position": {
-                        "coin": "BTC",
+                        "coin": instrument_id.split("-")[0],
                         "szi": str(account.position_qty),
                         "entryPx": str(account.avg_price),
                         "returnOnEquity": "0",
-                        "unrealizedPnl": "0",
+                        "unrealizedPnl": str(view["unrealized_pnl"]),
                     }
                 }
             ] if account.position_qty else [],
             "paper": {
                 "initial_balance": account.initial_balance,
                 "balance": account.balance,
+                "equity": view["equity"],
                 "realized_pnl": account.realized_pnl,
+                "unrealized_pnl": view["unrealized_pnl"],
                 "position_qty": account.position_qty,
                 "avg_price": account.avg_price,
+                "mark_price": view["mark_price"],
                 "cumulative_fees": account.cumulative_fees,
             },
         }
@@ -248,17 +265,55 @@ class PaperExecutionEngine:
     def _update_metrics(self, strategy_id: str, account: PaperAccount, instrument_id: str) -> None:
         from hl_engine.orchestrator.app import update_strategy_account_metrics
 
-        unrealized = 0.0
+        view = self._account_view(account, instrument_id)
         update_strategy_account_metrics(
             strategy_id,
             currency="USDC",
             instrument=instrument_id,
-            equity=account.balance + unrealized,
+            equity=view["equity"],
             balance=account.balance,
             realized_pnl=account.realized_pnl,
-            unrealized_pnl=unrealized,
+            unrealized_pnl=view["unrealized_pnl"],
             net_exposure_qty=account.position_qty if instrument_id else None,
         )
+
+    def _account_view(self, account: PaperAccount, instrument_id: str) -> dict:
+        mark_price = self._mark_price(instrument_id)
+        if mark_price is None or account.position_qty == 0.0:
+            mark_price = account.avg_price if account.position_qty else None
+        unrealized = self._unrealized_pnl(account, mark_price)
+        notional_price = mark_price or account.avg_price
+        return {
+            "mark_price": mark_price,
+            "unrealized_pnl": unrealized,
+            "equity": account.balance + unrealized,
+            "notional": abs(account.position_qty * notional_price),
+        }
+
+    def _mark_price(self, instrument_id: str) -> float | None:
+        if not instrument_id or self._mark_price_provider is None:
+            return None
+        try:
+            mark = self._mark_price_provider(instrument_id)
+        except Exception:
+            log.exception("Paper mark price provider failed for %s", instrument_id)
+            return None
+        return float(mark) if mark and mark > 0.0 else None
+
+    @staticmethod
+    def _unrealized_pnl(account: PaperAccount, mark_price: float | None) -> float:
+        if mark_price is None or account.position_qty == 0.0 or account.avg_price <= 0.0:
+            return 0.0
+        return account.position_qty * (mark_price - account.avg_price)
+
+    async def _restore_paper_metrics(self) -> None:
+        aggregates = await self._persistence.load_paper_fill_aggregates()
+        for strategy_id, aggregate in aggregates.items():
+            for side, count in aggregate["fills"].items():
+                metrics.fills_total.labels(strategy=strategy_id, side=side).inc(count)
+            fees = float(aggregate["fees"])
+            if fees:
+                metrics.commissions_paid.labels(strategy=strategy_id, currency="USDC").inc(fees)
 
     def _save_account(self, strategy_id: str, account: PaperAccount) -> None:
         self._persistence.save_paper_account(

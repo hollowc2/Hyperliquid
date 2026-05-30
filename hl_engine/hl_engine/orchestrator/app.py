@@ -526,7 +526,10 @@ async def register_strategy(strategy_id: str, req: RegisterRequest):
         _metrics_initialized.add(strategy_id)
     metrics.strategy_state.labels(strategy=strategy_id).set(1)
 
-    log.info(f"Strategy registered: {strategy_id} instance={req.instance_id[:8]}")
+    if existing is None:
+        log.info(f"Strategy registered: {strategy_id} instance={req.instance_id[:8]}")
+    else:
+        log.debug(f"Strategy registration refreshed: {strategy_id} instance={req.instance_id[:8]}")
     return {"status": "registered", "strategy_id": strategy_id}
 
 
@@ -563,7 +566,13 @@ async def reconcile(strategy_id: str):
             account_state = await order_gateway.get_account_state()
         elif paper_execution is not None:
             open_orders = []
-            account_state = paper_execution.account_state(strategy_id, _strategy_initial_balance(strategy_id))
+            spec = strategy_registry.get(strategy_id) if strategy_registry else None
+            instrument_id = spec.instrument_id if spec else "BTC-USD.HYPERLIQUID"
+            account_state = paper_execution.account_state(
+                strategy_id,
+                _strategy_initial_balance(strategy_id),
+                instrument_id,
+            )
         else:
             open_orders = []
             account_state = {}
@@ -611,7 +620,13 @@ async def get_account(strategy_id: str):
         if order_gateway is not None:
             state = await order_gateway.get_account_state()
         elif paper_execution is not None:
-            state = paper_execution.account_state(strategy_id, _strategy_initial_balance(strategy_id))
+            spec = strategy_registry.get(strategy_id) if strategy_registry else None
+            instrument_id = spec.instrument_id if spec else "BTC-USD.HYPERLIQUID"
+            state = paper_execution.account_state(
+                strategy_id,
+                _strategy_initial_balance(strategy_id),
+                instrument_id,
+            )
         else:
             state = {}
         return {"strategy_id": strategy_id, "account_state": state}

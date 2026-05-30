@@ -24,6 +24,7 @@ def _strategy(config=None):
     s = VClimaxReversalStrategy.__new__(VClimaxReversalStrategy)
     s._config = config or VClimaxReversalConfig()
     s._bars = deque(maxlen=32)
+    s._diagnostics = VClimaxReversalStrategy._new_diagnostics()
     return s
 
 
@@ -123,6 +124,18 @@ def test_pending_entry_expires_after_ttl_completed_bars():
 
     assert s._phase == ClimaxPhase.SEARCHING
     assert s._climax is None
+    assert s._diagnostics["pending_expired"] == 1
+
+
+def test_diagnostics_count_climax_filters():
+    config = VClimaxReversalConfig(lookback_bars=10, atr_period=10)
+    s = _strategy(config)
+    bars = [_bar(100, 100.1, 99.9, 100, 100, i) for i in range(11)]
+    s._bars.extend(bars)
+
+    assert s._detect_climax() is None
+    assert s._diagnostics["bars_evaluated"] == 1
+    assert s._diagnostics["waterfall_filter"] == 1
 
 
 def test_round_quantity_down_respects_increment_and_minimum():

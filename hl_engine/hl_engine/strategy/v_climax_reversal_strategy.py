@@ -83,6 +83,7 @@ class VClimaxReversalStrategy(Strategy):
         self._active_stop: Optional[float] = None
         self._total_commission = 0.0
         self._last_state_push_ns = 0
+        self._diagnostics = self._new_diagnostics()
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -231,6 +232,7 @@ class VClimaxReversalStrategy(Strategy):
 
         climax = self._detect_climax()
         if climax is not None:
+            self._diagnostics["climax_detected"] += 1
             self._climax = climax
             self._bars_since_climax = 0
             self._phase = ClimaxPhase.PENDING_ENTRY
@@ -243,9 +245,11 @@ class VClimaxReversalStrategy(Strategy):
         cfg = self._config
         required = max(cfg.lookback_bars + 1, cfg.atr_period + 1)
         if len(self._bars) < required:
+            self._diagnostics["warmup_bars"] += 1
             return None
 
         current = self._bars[-1]
+        self._diagnostics["bars_evaluated"] += 1
         window = list(self._bars)[-cfg.lookback_bars:]
         prior_volume_window = list(self._bars)[-(cfg.lookback_bars + 1):-1]
         atr_window = list(self._bars)[-(cfg.atr_period + 1):]
@@ -253,16 +257,20 @@ class VClimaxReversalStrategy(Strategy):
         window_high = max(b.high for b in window)
         window_low = min(b.low for b in window)
         if window_high <= 0.0:
+            self._diagnostics["invalid_window"] += 1
             return None
 
         waterfall = (window_high - window_low) / window_high
         if waterfall <= cfg.waterfall_drop_pct:
+            self._diagnostics["waterfall_filter"] += 1
             return None
         if current.low > window_low:
+            self._diagnostics["window_low_filter"] += 1
             return None
 
         avg_volume = self._sma_volume(prior_volume_window)
         if avg_volume <= 0.0 or current.volume < cfg.volume_multiple * avg_volume:
+            self._diagnostics["volume_filter"] += 1
             return None
 
         atr = self._atr(atr_window)
@@ -288,13 +296,16 @@ class VClimaxReversalStrategy(Strategy):
         if self._active_entry_order_id is not None or self._climax is None:
             return
         if ask_price < self._climax.high:
+            self._diagnostics["entry_price_wait"] += 1
             return
         max_ask = self._climax.high * (1.0 + self._config.entry_slippage_cap_pct)
         if ask_price > max_ask:
+            self._diagnostics["entry_slippage_filter"] += 1
             return
 
         qty = self._compute_order_quantity(ask_price, self._climax.initial_stop)
         if qty <= 0.0:
+            self._diagnostics["entry_zero_qty"] += 1
             self.log.warning("Climax entry skipped: computed quantity is zero")
             return
 
@@ -307,6 +318,7 @@ class VClimaxReversalStrategy(Strategy):
         self._active_entry_order_id = order.client_order_id
         self._phase = ClimaxPhase.ENTERING
         self.submit_order(order)
+        self._diagnostics["entry_submitted"] += 1
         self.log.info(f"Submitted v-climax BUY qty={qty} ask={ask_price:.2f}")
 
     def _maybe_activate_trailing(self, mark_price: float) -> None:
@@ -466,7 +478,25 @@ class VClimaxReversalStrategy(Strategy):
                 "climax_low": climax.low if climax else None,
                 "climax_atr": climax.atr if climax else None,
                 "pending_entry_ttl_bars": climax.expires_after_bar_count if climax else None,
+                "diagnostics": dict(self._diagnostics),
             },
+        }
+
+    @staticmethod
+    def _new_diagnostics() -> dict[str, int]:
+        return {
+            "warmup_bars": 0,
+            "bars_evaluated": 0,
+            "invalid_window": 0,
+            "waterfall_filter": 0,
+            "window_low_filter": 0,
+            "volume_filter": 0,
+            "climax_detected": 0,
+            "entry_price_wait": 0,
+            "entry_slippage_filter": 0,
+            "entry_zero_qty": 0,
+            "entry_submitted": 0,
+            "pending_expired": 0,
         }
 
     async def _push_state_to_orchestrator(self, base_url: str, strategy_id: str, state: dict) -> None:
@@ -504,6 +534,8 @@ class VClimaxReversalStrategy(Strategy):
             self._active_stop = max(self._active_stop, candidate_stop)
 
     def _clear_climax(self) -> None:
+        if self._phase == ClimaxPhase.PENDING_ENTRY:
+            self._diagnostics["pending_expired"] += 1
         self._climax = None
         self._bars_since_climax = 0
         self._phase = ClimaxPhase.SEARCHING
