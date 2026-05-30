@@ -4,7 +4,6 @@ HyperliquidInstrumentProvider — loads CryptoPerpetual instruments from Hyperli
 Hyperliquid is USDC-margined, so settlement_currency=USDC for all instruments.
 """
 
-import json
 from decimal import Decimal
 from typing import Optional
 

@@ -45,3 +45,8 @@ asyncio_mode = "auto"
 [tool.uv]
 # Pin the index so Docker layer cache stays valid even after upstream index changes
 index-url = "https://pypi.org/simple"
+
+[dependency-groups]
+dev = [
+    "ruff>=0.15.15",
+]

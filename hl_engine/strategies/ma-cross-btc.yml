@@ -7,6 +7,9 @@ parameters:
   fast_period: 10
   slow_period: 30
   bar_minutes: 1
+  min_signal_spread_bps: 2.0
+  min_hold_bars: 5
+  cooldown_bars_after_exit: 3
 risk:
   max_position_usd: 1000
   max_leverage: 2.0

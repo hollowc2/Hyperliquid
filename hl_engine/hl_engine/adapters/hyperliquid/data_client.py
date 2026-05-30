@@ -21,7 +21,6 @@ from nautilus_trader.model.data import (
     CustomData,
     DataType,
     OrderBookDelta,
-    OrderBookDeltas,
     TradeTick,
 )
 from nautilus_trader.model.enums import (

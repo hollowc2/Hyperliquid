@@ -28,3 +28,5 @@ class TrendFollowConfig(StrategyConfig):
     allow_short: bool = True
     initial_balance_usdc: float = 1000.0
     max_position_usd: float = 1000.0
+    min_hold_trade_bars: int = 0
+    cooldown_trade_bars_after_exit: int = 0

@@ -10,7 +10,6 @@ Requires .env file with:
     HL_TESTNET=false  (or true for testnet)
 """
 
-import asyncio
 
 from nautilus_trader.config import (
     LiveExecEngineConfig,

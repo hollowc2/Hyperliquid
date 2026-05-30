@@ -40,20 +40,17 @@ from websockets.connection import State as WsState
 from nautilus_trader.model.currencies import USDC
 from nautilus_trader.model.data import (
     Bar,
-    BarSpecification,
     BarType,
     OrderBookDelta,
     TradeTick,
 )
 from nautilus_trader.model.enums import (
     AggressorSide,
-    BarAggregation,
     BookAction,
     CurrencyType,
     OrderSide,
-    PriceType,
 )
-from nautilus_trader.model.identifiers import InstrumentId, Symbol, TradeId, Venue
+from nautilus_trader.model.identifiers import InstrumentId, Symbol, TradeId
 from nautilus_trader.model.instruments import CryptoPerpetual
 from nautilus_trader.model.objects import Currency, Price, Quantity
 from nautilus_trader.persistence.catalog import ParquetDataCatalog

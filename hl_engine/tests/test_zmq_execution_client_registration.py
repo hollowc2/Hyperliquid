@@ -12,6 +12,7 @@ from hl_engine.adapters.zmq.execution_client import (
     ZmqRestExecClient,
     _build_order_status_report,
     _is_buy_side,
+    _order_needs_submitted,
 )
 
 
@@ -118,3 +119,17 @@ def test_order_status_report_uses_cached_order_fields():
     assert report.order_status == OrderStatus.FILLED
     assert report.quantity == Quantity.from_str("0.10")
     assert report.filled_qty == Quantity.from_str("0.10")
+
+
+def test_order_needs_submitted_only_for_unknown_or_initialized_orders():
+    client_order_id = ClientOrderId("C-002")
+
+    assert _order_needs_submitted(SimpleNamespace(order=lambda order_id: None), client_order_id)
+    assert _order_needs_submitted(
+        SimpleNamespace(order=lambda order_id: SimpleNamespace(status=OrderStatus.INITIALIZED)),
+        client_order_id,
+    )
+    assert not _order_needs_submitted(
+        SimpleNamespace(order=lambda order_id: SimpleNamespace(status=OrderStatus.SUBMITTED)),
+        client_order_id,
+    )

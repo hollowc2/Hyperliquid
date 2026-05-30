@@ -7,7 +7,6 @@ asyncio.to_thread() to avoid blocking the event loop.
 
 import asyncio
 import logging
-from typing import Optional
 
 import aiohttp
 

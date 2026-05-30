@@ -18,6 +18,8 @@ parameters:
   atr_period: 14
   atr_stop_multiple: 3.0
   risk_fraction: 0.005
+  min_hold_trade_bars: 2
+  cooldown_trade_bars_after_exit: 1
   allow_long: true
   allow_short: true
 risk:

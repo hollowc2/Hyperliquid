@@ -80,6 +80,8 @@ class TrendFollowStrategy(Strategy):
         self._last_state_push_ns = 0
         self._live_started_ns = 0
         self._skip_historical_warmup_orders = False
+        self._bars_since_entry = 0
+        self._entry_cooldown_trade_bars = 0
 
     def on_start(self) -> None:
         self._instrument_id = InstrumentId.from_str(self._config.instrument_id)
@@ -130,6 +132,7 @@ class TrendFollowStrategy(Strategy):
             self._entry_price = float(event.last_px)
             self._entry_qty = float(event.last_qty)
             self._active_side = "LONG" if event.order_side == OrderSide.BUY else "SHORT"
+            self._bars_since_entry = 0
             self.log.info(
                 f"Trend entry filled side={self._active_side} qty={event.last_qty} "
                 f"px={event.last_px} stop={self._stop_price}"
@@ -160,10 +163,15 @@ class TrendFollowStrategy(Strategy):
         self._push_state_snapshot()
 
     def _on_trade_bar(self, bar: TrendBar) -> None:
+        if self._active_side != "FLAT":
+            self._bars_since_entry += 1
+        elif self._entry_cooldown_trade_bars > 0:
+            self._entry_cooldown_trade_bars -= 1
+
         self._trail_stop(bar)
         signal = self._aligned_signal()
         if self._active_side != "FLAT":
-            if self._position_invalidated(signal):
+            if self._position_invalidated(signal) and self._bars_since_entry >= self._config.min_hold_trade_bars:
                 self._submit_exit("regime_invalidated")
             else:
                 self._check_bar_stop(bar)
@@ -181,6 +189,9 @@ class TrendFollowStrategy(Strategy):
             return
         if not self._entry_filter_allows(signal):
             self._last_signal_reason = "entry_filter_blocked"
+            return
+        if self._entry_cooldown_trade_bars > 0:
+            self._last_signal_reason = "entry_cooldown"
             return
 
         stop = self._initial_stop(signal, bar.close)
@@ -443,6 +454,8 @@ class TrendFollowStrategy(Strategy):
         self._entry_price = None
         self._entry_qty = None
         self._stop_price = None
+        self._bars_since_entry = 0
+        self._entry_cooldown_trade_bars = self._config.cooldown_trade_bars_after_exit
 
     def _add_source_bar_to_timeframes(self, bar: Bar) -> list[tuple[str, TrendBar]]:
         closed: list[tuple[str, TrendBar]] = []

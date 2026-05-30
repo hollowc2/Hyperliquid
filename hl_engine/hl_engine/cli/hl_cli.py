@@ -13,7 +13,6 @@ ORCHESTRATOR_REST_URL env var sets the base URL (default: http://localhost:8000)
 """
 
 import os
-import sys
 
 import httpx
 import typer

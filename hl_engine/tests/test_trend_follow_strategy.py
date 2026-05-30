@@ -207,3 +207,48 @@ def test_live_historical_warmup_detection_uses_ts_init_not_event_time():
     live_bar.ts_init = strategy._live_started_ns + 1
 
     assert not strategy._is_historical_warmup_bar(live_bar)
+
+
+def test_regime_invalidation_respects_min_hold_trade_bars(monkeypatch):
+    config = TrendFollowConfig(min_hold_trade_bars=2)
+    strategy = _strategy(config)
+    strategy._active_side = "LONG"
+    strategy._stop_price = 90.0
+    strategy._bars_since_entry = 0
+    strategy._entry_cooldown_trade_bars = 0
+    strategy._active_entry_order_id = None
+    strategy._active_exit_order_id = None
+    exits = []
+
+    monkeypatch.setattr(strategy, "_trail_stop", lambda bar: None)
+    monkeypatch.setattr(strategy, "_aligned_signal", lambda: "MIXED")
+    monkeypatch.setattr(strategy, "_check_bar_stop", lambda bar: None)
+    monkeypatch.setattr(strategy, "_submit_exit", lambda reason: exits.append(reason))
+
+    strategy._on_trade_bar(_trend_bar(100, 101, 99, 100))
+    assert exits == []
+
+    strategy._on_trade_bar(_trend_bar(100, 101, 99, 100))
+    assert exits == ["regime_invalidated"]
+
+
+def test_entry_cooldown_blocks_new_trend_entries(monkeypatch):
+    config = TrendFollowConfig(cooldown_trade_bars_after_exit=2)
+    strategy = _strategy(config)
+    strategy._active_side = "FLAT"
+    strategy._active_entry_order_id = None
+    strategy._active_exit_order_id = None
+    strategy._entry_cooldown_trade_bars = 2
+    submitted = []
+
+    monkeypatch.setattr(strategy, "_trail_stop", lambda bar: None)
+    monkeypatch.setattr(strategy, "_aligned_signal", lambda: "LONG")
+    monkeypatch.setattr(strategy, "_entry_filter_allows", lambda side: True)
+    monkeypatch.setattr(strategy, "_initial_stop", lambda side, entry_price: entry_price - 10.0)
+    monkeypatch.setattr(strategy, "_compute_order_quantity", lambda entry_price, stop_price: 1.0)
+    monkeypatch.setattr(strategy, "_submit_entry", lambda side, qty: submitted.append((side, qty)))
+
+    strategy._on_trade_bar(_trend_bar(100, 101, 99, 100))
+
+    assert submitted == []
+    assert strategy._last_signal_reason == "entry_cooldown"

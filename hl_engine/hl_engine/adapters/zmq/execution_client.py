@@ -35,7 +35,7 @@ from nautilus_trader.execution.messages import (
 )
 from nautilus_trader.execution.reports import FillReport, OrderStatusReport, PositionStatusReport
 from nautilus_trader.live.execution_client import LiveExecutionClient
-from nautilus_trader.model.enums import AccountType, LiquiditySide, OmsType, OrderSide, OrderType
+from nautilus_trader.model.enums import AccountType, LiquiditySide, OmsType, OrderSide, OrderStatus, OrderType
 from nautilus_trader.model.identifiers import (
     AccountId,
     ClientId,
@@ -60,6 +60,11 @@ def _is_5xx(exc: Exception) -> bool:
     if isinstance(exc, aiohttp.ClientResponseError):
         return exc.status >= 500
     return False
+
+
+def _order_needs_submitted(cache, client_order_id: ClientOrderId) -> bool:
+    order = cache.order(client_order_id)
+    return order is None or order.status == OrderStatus.INITIALIZED
 
 
 def _build_order_status_report(
@@ -334,7 +339,7 @@ class ZmqRestExecClient(LiveExecutionClient):
             cl_id = order.client_order_id.value
             self._order_id_map[cl_id] = int(oid)
             self._oid_to_client_id[int(oid)] = cl_id
-            self.generate_order_submitted(
+            self._generate_order_submitted_once(
                 strategy_id=command.strategy_id,
                 instrument_id=order.instrument_id,
                 client_order_id=order.client_order_id,
@@ -453,6 +458,15 @@ class ZmqRestExecClient(LiveExecutionClient):
         dir_ = data.get("dir", "")
         ts_event = int(data.get("ts_event_ns", 0))
 
+        self._order_id_map[client_order_id_str] = oid
+        self._oid_to_client_id[oid] = client_order_id_str
+        self._generate_order_submitted_once(
+            strategy_id=order.strategy_id,
+            instrument_id=order.instrument_id,
+            client_order_id=client_order_id,
+            ts_event=ts_event or self._clock.timestamp_ns(),
+        )
+
         from nautilus_trader.model.currencies import USDC
 
         self.generate_order_filled(
@@ -476,6 +490,23 @@ class ZmqRestExecClient(LiveExecutionClient):
         instrument_key = str(order.instrument_id)
         updated_qty = self._net_positions.get(instrument_key, 0.0) + signed_qty
         self._net_positions[instrument_key] = 0.0 if abs(updated_qty) < 1e-12 else updated_qty
+
+    def _generate_order_submitted_once(
+        self,
+        *,
+        strategy_id,
+        instrument_id,
+        client_order_id: ClientOrderId,
+        ts_event: int,
+    ) -> None:
+        if not _order_needs_submitted(self._cache, client_order_id):
+            return
+        self.generate_order_submitted(
+            strategy_id=strategy_id,
+            instrument_id=instrument_id,
+            client_order_id=client_order_id,
+            ts_event=ts_event,
+        )
 
     def _process_cancel(self, data: dict) -> None:
         oid = int(data.get("oid", 0))

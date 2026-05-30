@@ -19,7 +19,6 @@ import json
 import os
 import time
 from datetime import datetime, timezone
-from pathlib import Path
 
 import httpx
 from rich.columns import Columns
@@ -98,10 +97,10 @@ def build_dashboard(state: dict, state_file: str, err: str | None) -> Layout:
         mid = state.get("mid_px", 0.0)
         regime_color = {"TRENDING": "cyan", "RANGING": "yellow", "VOLATILE": "magenta"}.get(regime, "white")
         header_text = Text()
-        header_text.append(f"  APEX Monitor  ", style="bold white on navy_blue")
+        header_text.append("  APEX Monitor  ", style="bold white on navy_blue")
         header_text.append(f"  {instrument}  ", style="bold cyan")
         header_text.append(f"  ${mid:,.2f}  ", style="bold white")
-        header_text.append(f"  Regime: ", style="white")
+        header_text.append("  Regime: ", style="white")
         header_text.append(f"{regime}  ", style=f"bold {regime_color}")
         header_text.append("  Updated: ", style="dim")
         header_text.append_text(Text.from_markup(ts_age))
@@ -153,7 +152,6 @@ def build_dashboard(state: dict, state_file: str, err: str | None) -> Layout:
         clamped = max(lo, min(hi, val))
         frac = (clamped - lo) / (hi - lo)
         filled = int(frac * width)
-        mid_i = width // 2
         bar_chars = [" "] * width
         center = width // 2
         if filled >= center:
@@ -162,7 +160,6 @@ def build_dashboard(state: dict, state_file: str, err: str | None) -> Layout:
         else:
             for i in range(filled, center):
                 bar_chars[i] = "█"
-        bar_str = "".join(bar_chars)
         color = "green" if val >= 0 else "red"
         return f"[{color}]{''.join(bar_chars[:center])}[/{color}][dim]|[/dim][{color}]{''.join(bar_chars[center:])}[/{color}]"
 

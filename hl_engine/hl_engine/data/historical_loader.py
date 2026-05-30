@@ -27,16 +27,15 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from nautilus_trader.model.data import Bar, BarType
-from nautilus_trader.model.identifiers import InstrumentId, Symbol
+from nautilus_trader.model.identifiers import InstrumentId
 from nautilus_trader.model.objects import Price, Quantity
 from nautilus_trader.persistence.catalog import ParquetDataCatalog
 
 from hl_engine.adapters.hyperliquid.constants import (
     HL_BASE_URL,
     HL_INFO_ENDPOINT,
-    HYPERLIQUID_VENUE,
 )
-from hl_engine.data.live_recorder import _build_instrument, _infer_price_precision
+from hl_engine.data.live_recorder import _build_instrument
 
 log = logging.getLogger(__name__)
 

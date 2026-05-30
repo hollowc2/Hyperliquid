@@ -6,7 +6,6 @@ Provides:
   - Queue position fill probability for passive limit orders
 """
 
-from typing import Tuple
 
 
 class SlippageModel:

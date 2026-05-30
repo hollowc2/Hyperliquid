@@ -56,6 +56,8 @@ class MaCrossStrategy(Strategy):
         self._active_order_id = None
         self._notional_limit_halted = False
         self._signed_position_qty = 0.0
+        self._bars_since_position_change = 0
+        self._exit_cooldown_bars_remaining = 0
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -126,6 +128,7 @@ class MaCrossStrategy(Strategy):
 
     def on_bar(self, bar: Bar) -> None:
         self._closes.append(float(bar.close))
+        self._bars_since_position_change += 1
 
         # Need slow_period + 1 bars: slow_period for current SMA + 1 for previous SMA
         if len(self._closes) < self._config.slow_period + 1:
@@ -149,7 +152,15 @@ class MaCrossStrategy(Strategy):
         if not (crossed_up or crossed_down):
             return
 
+        if self._signal_spread_bps(fast_now, slow_now) < self._config.min_signal_spread_bps:
+            return
+
         side = OrderSide.BUY if crossed_up else OrderSide.SELL
+        if self._exit_cooldown_bars_remaining > 0 and not self._side_reduces_position(side):
+            self._exit_cooldown_bars_remaining -= 1
+            return
+        if self._side_reduces_position(side) and self._bars_since_position_change < self._config.min_hold_bars:
+            return
         if self._side_increases_position(side):
             return
 
@@ -180,8 +191,12 @@ class MaCrossStrategy(Strategy):
         if self._active_order_id and event.client_order_id == self._active_order_id:
             self._active_order_id = None
         signed_qty = float(event.last_qty) if event.order_side == OrderSide.BUY else -float(event.last_qty)
+        was_positioned = self._signed_position_qty != 0.0
         updated_qty = self._signed_position_qty + signed_qty
         self._signed_position_qty = 0.0 if abs(updated_qty) < 1e-12 else updated_qty
+        self._bars_since_position_change = 0
+        if was_positioned and self._signed_position_qty == 0.0:
+            self._exit_cooldown_bars_remaining = self._config.cooldown_bars_after_exit
 
     def on_order_canceled(self, event) -> None:
         if self._active_order_id and event.client_order_id == self._active_order_id:
@@ -228,3 +243,9 @@ class MaCrossStrategy(Strategy):
         position = open_positions[0]
         is_buy = side == OrderSide.BUY
         return (position.is_long and is_buy) or (not position.is_long and not is_buy)
+
+    @staticmethod
+    def _signal_spread_bps(fast: float, slow: float) -> float:
+        if slow == 0.0:
+            return 0.0
+        return abs(fast - slow) / abs(slow) * 10_000.0

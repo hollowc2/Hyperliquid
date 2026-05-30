@@ -13,7 +13,6 @@ after accounting for transaction costs (spread).
 
 import math
 from dataclasses import dataclass
-from typing import Optional
 
 
 @dataclass
