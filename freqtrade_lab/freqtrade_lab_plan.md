@@ -1,12 +1,14 @@
-# Plan: Hyperliquid Streak Reversal Bot — Standalone Project
+# Plan: Hyperliquid Freqtrade Lab
 
 ## Context
 
-Port the Streak Reversal strategy (proven ~57-60% win rate on 15m ETH from
-Polymarket backtests) to a standalone perpetual futures bot on Hyperliquid.
+Build a reusable Freqtrade workspace for testing and running multiple
+Hyperliquid perpetual futures strategies.
 
-This is a NEW standalone Python project — extracted from the polymarket_auto_trader
-monorepo, keeping only what's needed, restructured for simplicity.
+The first strategy in the workspace is the Streak Reversal strategy, ported from
+prior Polymarket backtests. Future strategies should live alongside it under
+`user_data/strategies/` and share the same data, config, backtest, and reporting
+pipeline.
 
 Key differences from Polymarket:
 - Both long AND short signals (doubles trade count)
@@ -21,10 +23,10 @@ Confirmed design decisions:
 
 ---
 
-## Standalone Project Structure
+## Project Structure
 
 ```
-hyperliquid-streak-bot/
+freqtrade_lab/
 ├── pyproject.toml          # uv project, single package
 ├── .env.example            # all required env vars documented
 ├── .env                    # gitignored
@@ -39,7 +41,7 @@ hyperliquid-streak-bot/
 │   └── trades.json
 ├── Dockerfile
 ├── docker-compose.yml
-└── hyperliquid_streak_bot_plan.md   # THIS plan document (written on first implementation step)
+└── freqtrade_lab_plan.md   # THIS plan document
 ```
 
 ---
@@ -48,7 +50,7 @@ hyperliquid-streak-bot/
 
 ```toml
 [project]
-name = "hyperliquid-streak-bot"
+name = "hyperliquid-freqtrade-lab"
 version = "0.1.0"
 requires-python = ">=3.13"
 dependencies = [
@@ -97,7 +99,7 @@ def apply_trend_filter(signal: int, candles: pd.DataFrame, ema_period: int = 100
 
 ## src/data.py — Binance Candles
 
-Copy `fetch_live_candles()` from scripts/streak_bot.py.
+Copy `fetch_live_candles()` from the original streak strategy tooling.
 Fetch last N 15m candles from Binance public API (no auth required).
 Returns pd.DataFrame with columns: open, high, low, close, volume, timestamp.
 
@@ -285,10 +287,10 @@ MAX_DAILY_LOSS_USD=100.0
 
 ## Build Sequence
 
-1. Write `hyperliquid_streak_bot_plan.md` to project root (this document)
-2. Scaffold project: `uv init hyperliquid-streak-bot`, create `src/` layout
+1. Write `freqtrade_lab_plan.md` to project root (this document)
+2. Scaffold project: `uv init hyperliquid-freqtrade-lab`, create `src/` layout
 3. `src/resilience.py` — copy CircuitBreaker, RateLimiter, with_retry verbatim
-4. `src/data.py` — copy + simplify fetch_live_candles() from streak_bot.py
+4. `src/data.py` — copy + simplify fetch_live_candles() from the original streak strategy tooling
 5. `src/strategy.py` — implement streak_signal() + apply_trend_filter()
 6. `src/client.py` — HyperliquidClient wrapping SDK
 7. `src/trader.py` — HLTrade, HLTradingState, HLPaperTrader

@@ -67,7 +67,7 @@
     "username": "changeme",
     "password": "changeme"
   },
-  "bot_name": "hyperliquid_streak_bot",
+  "bot_name": "hyperliquid_freqtrade_lab",
   "initial_state": "running",
   "force_entry_enable": false,
   "internals": {
