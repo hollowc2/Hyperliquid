@@ -1,4 +1,4 @@
-# HyperliquidPublicAPI
+# HL Data API
 
 Free, no-auth Python client for Hyperliquid perpetuals market data. No API key required.
 
@@ -17,7 +17,7 @@ pip install requests rich
 Or install as an editable package so it's importable from any project:
 
 ```bash
-pip install -e /path/to/data_api
+pip install -e /path/to/hl_data_api
 ```
 
 ---

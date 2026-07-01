@@ -1,4 +1,4 @@
-# top_wallets
+# Wallet Tracker
 
 Terminal dashboard for monitoring the top 10 Hyperliquid leaderboard wallets in real time.
 
