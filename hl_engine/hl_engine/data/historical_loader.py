@@ -158,6 +158,7 @@ class HistoricalDataLoader:
 
         chunk_start = start_ms
         total_bars = 0
+        last_written_ts_event = 0
 
         async with aiohttp.ClientSession() as session:
             while chunk_start < end_ms:
@@ -182,8 +183,17 @@ class HistoricalDataLoader:
                     chunk_start = chunk_end
                     continue
 
-                bars = [_parse_candle(c, bar_type, instrument) for c in candles]
+                bars = [
+                    bar
+                    for bar in (_parse_candle(c, bar_type, instrument) for c in candles)
+                    if int(bar.ts_event) > last_written_ts_event
+                ]
+                if not bars:
+                    chunk_start = chunk_end + 1
+                    continue
+
                 self._catalog.write_data(data=bars)
+                last_written_ts_event = int(bars[-1].ts_event)
                 total_bars += len(bars)
                 log.debug(f"  {coin}: wrote {len(bars)} bars (chunk {chunk_start}–{chunk_end})")
 

@@ -1,13 +1,21 @@
 DATA_DIR := user_data/data/hyperliquid
 CONFIG := user_data/config/config.json
 BACKTEST_CONFIG := user_data/config/config.backtest.json
+COINBASE_MULTI_CONFIG := user_data/config/config.backtest.coinbase.multi.json
+HLPROXY_MULTI_CONFIG := user_data/config/config.backtest.hlproxy.multi.json
 STRATEGY := StreakReversalStrategy
 -include .env
 
 COIN ?= ETH
+SYMBOLS ?= BTC ETH SOL LINK HYPE XRP
+PAIRS ?= BTC/USD ETH/USD SOL/USD LINK/USD HYPE/USD XRP/USD
 TIMEFRAME ?= 5m
 SUPPORT_TIMEFRAME ?= 1h
+TIMEFRAMES ?= 5m 1h
+TIMERANGE ?= 20250702-20260702
 HL_CATALOG ?= ../hl_engine/data/catalog
+COINBASE_DATA_DIR ?= user_data/data/coinbase
+HLPROXY_DATA_DIR ?= user_data/data/coinbase_hlproxy
 STREAK_TRIGGER ?= 6
 EMA_PERIOD ?= 100
 RISK_PCT ?= 0.01
@@ -18,7 +26,7 @@ LEVERAGE ?= 1
 FT_CONTEXT_ENABLED ?= false
 FT_CONTEXT_DIR ?= user_data/data/context
 
-.PHONY: export-data backtest sweep trade
+.PHONY: export-data download-coinbase-data proxy-coinbase-data long-data backtest sweep trade
 
 export-data:
 	cd ../hl_engine && uv run python export_freqtrade_ohlcv.py \
@@ -32,6 +40,25 @@ export-data:
 		--source-timeframe $(TIMEFRAME) \
 		--timeframe $(SUPPORT_TIMEFRAME) \
 		--output ../freqtrade_lab/$(DATA_DIR)
+
+download-coinbase-data:
+	docker compose run --rm freqtrade download-data \
+		--config /freqtrade/$(COINBASE_MULTI_CONFIG) \
+		--datadir /freqtrade/$(COINBASE_DATA_DIR) \
+		--pairs $(PAIRS) \
+		--timeframes $(TIMEFRAMES) \
+		--timerange $(TIMERANGE) \
+		--trading-mode spot \
+		--erase
+
+proxy-coinbase-data:
+	python scripts/proxy_spot_to_hl_futures.py \
+		--source-dir $(COINBASE_DATA_DIR) \
+		--dest-dir $(HLPROXY_DATA_DIR) \
+		--symbols $(SYMBOLS) \
+		--timeframes $(TIMEFRAMES)
+
+long-data: download-coinbase-data proxy-coinbase-data
 
 backtest:
 	docker compose run --rm \
