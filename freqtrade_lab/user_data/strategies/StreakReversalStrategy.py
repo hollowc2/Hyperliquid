@@ -327,13 +327,15 @@ class StreakReversalStrategy(IStrategy):
     # ------------------------------------------------------------------
     def custom_stake_amount(
         self,
+        pair: str,
         current_time: datetime,
         current_rate: float,
-        current_available_balance: float,
+        proposed_stake: float,
+        min_stake: Optional[float],
+        max_stake: float,
+        leverage: float,
         entry_tag: Optional[str],
         side: str,
-        leverage: float,
-        max_stake: float,
         **kwargs,
     ) -> float:
         """
@@ -345,14 +347,13 @@ class StreakReversalStrategy(IStrategy):
         freqtrade auto-clamps to [min_stake, max_stake].
         """
         try:
-            pair = kwargs.get("pair", "")
             dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
             if dataframe is None or dataframe.empty:
-                return max_stake
+                return proposed_stake
 
             atr = dataframe.iloc[-1]["atr"]
             if pd.isna(atr) or atr <= 0 or current_rate <= 0:
-                return max_stake
+                return proposed_stake
 
             # At leverage=1, max_stake == equity. At higher leverage, equity = max_stake / leverage.
             equity = max_stake / leverage
@@ -366,6 +367,9 @@ class StreakReversalStrategy(IStrategy):
             max_by_pct = equity * MAX_POSITION_PCT
 
             stake = min(size_usd, max_by_pct)
+            if min_stake is not None:
+                stake = max(stake, min_stake)
+            stake = min(stake, max_stake)
             logger.debug(
                 "custom_stake_amount: atr=%.4f stop_pct=%.4f risk_usd=%.2f size_usd=%.2f max_pct=%.2f → stake=%.2f",
                 atr, stop_pct, risk_usd, size_usd, max_by_pct, stake,
@@ -374,7 +378,7 @@ class StreakReversalStrategy(IStrategy):
 
         except Exception as exc:
             logger.error("custom_stake_amount: unexpected error: %s", exc)
-            return max_stake
+            return proposed_stake
 
     # ------------------------------------------------------------------
     # leverage callback

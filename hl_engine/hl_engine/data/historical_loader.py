@@ -187,9 +187,11 @@ class HistoricalDataLoader:
                 total_bars += len(bars)
                 log.debug(f"  {coin}: wrote {len(bars)} bars (chunk {chunk_start}–{chunk_end})")
 
-                # Advance past the last candle we received
-                last_ts = int(candles[-1].get("T", candles[-1].get("t", chunk_end)))
-                chunk_start = last_ts + interval_ms
+                # Advance by requested chunk, not by the last returned candle.
+                # Hyperliquid may cap very large snapshots and return the latest
+                # candles in the requested window; advancing from the last candle
+                # would skip older data inside that same window.
+                chunk_start = chunk_end + 1
 
                 # Rate-limit: HL allows ~10 req/s, be conservative
                 await asyncio.sleep(0.2)

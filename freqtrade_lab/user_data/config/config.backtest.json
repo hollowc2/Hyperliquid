@@ -12,11 +12,12 @@
   "timeframe": "5m",
   "dataformat_ohlcv": "json",
   "dry_run": true,
-  "dry_run_wallet": 100,
+  "dry_run_wallet": 1000,
   "cancel_open_orders_on_exit": true,
   "trading_mode": "futures",
   "margin_mode": "isolated",
   "liquidation_buffer": 0.05,
+  "futures_funding_rate": 0,
   "order_types": {
     "entry": "limit",
     "exit": "limit",
@@ -45,8 +46,8 @@
   },
   "exchange": {
     "name": "hyperliquid",
-    "key": "${HL_WALLET_ADDRESS}",
-    "secret": "${HL_PRIVATE_KEY}",
+    "key": "",
+    "secret": "",
     "pair_whitelist": [
       "ETH/USDC:USDC"
     ],
@@ -58,17 +59,17 @@
     }
   ],
   "api_server": {
-    "enabled": true,
-    "listen_ip_address": "0.0.0.0",
+    "enabled": false,
+    "listen_ip_address": "127.0.0.1",
     "listen_port": 8080,
     "verbosity": "error",
     "enable_openapi": false,
-    "jwt_secret_key": "changeme",
+    "jwt_secret_key": "somethingRandomSomethingRandom123",
     "CORS_origins": [],
-    "username": "changeme",
-    "password": "changeme"
+    "username": "backtest",
+    "password": "backtest"
   },
-  "bot_name": "hyperliquid_freqtrade_lab",
+  "bot_name": "streak_reversal_backtest",
   "initial_state": "running",
   "force_entry_enable": false,
   "internals": {
