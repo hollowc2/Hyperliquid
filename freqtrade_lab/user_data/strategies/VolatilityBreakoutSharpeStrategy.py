@@ -13,6 +13,8 @@ import pandas as pd
 import pandas_ta as pta
 from freqtrade.strategy import IStrategy
 
+from context_data import add_optional_context
+
 
 LOOKBACK = int(os.environ.get("VB_LOOKBACK", 36))
 EMA_FAST = int(os.environ.get("VB_EMA_FAST", 48))
@@ -38,6 +40,7 @@ class VolatilityBreakoutSharpeStrategy(IStrategy):
     trailing_stop = False
 
     def populate_indicators(self, dataframe: pd.DataFrame, metadata: dict) -> pd.DataFrame:
+        dataframe = add_optional_context(dataframe, metadata.get("pair"), self.timeframe)
         dataframe["ema_fast"] = pta.ema(dataframe["close"], length=EMA_FAST)
         dataframe["ema_slow"] = pta.ema(dataframe["close"], length=EMA_SLOW)
         dataframe["atr"] = pta.atr(
@@ -75,13 +78,33 @@ class VolatilityBreakoutSharpeStrategy(IStrategy):
         long_break = dataframe["close"] > dataframe["range_high"]
         short_break = dataframe["close"] < dataframe["range_low"]
 
-        long_mask = clean_vol & long_break & dataframe["trend_up"]
-        short_mask = clean_vol & short_break & dataframe["trend_down"]
+        long_mask = (
+            clean_vol
+            & long_break
+            & dataframe["trend_up"]
+            & dataframe["ctx_risk_on_ok"]
+            & dataframe["ctx_funding_neutral"]
+        )
+        short_mask = (
+            clean_vol
+            & short_break
+            & dataframe["trend_down"]
+            & dataframe["ctx_risk_off_ok"]
+            & dataframe["ctx_funding_neutral"]
+        )
 
         dataframe.loc[long_mask, "enter_long"] = 1
-        dataframe.loc[long_mask, "enter_tag"] = "vol_breakout_long"
+        dataframe.loc[long_mask, "enter_tag"] = np.where(
+            dataframe.loc[long_mask, "ctx_loaded"] > 0,
+            "vol_breakout_long_ctx",
+            "vol_breakout_long",
+        )
         dataframe.loc[short_mask, "enter_short"] = 1
-        dataframe.loc[short_mask, "enter_tag"] = "vol_breakout_short"
+        dataframe.loc[short_mask, "enter_tag"] = np.where(
+            dataframe.loc[short_mask, "ctx_loaded"] > 0,
+            "vol_breakout_short_ctx",
+            "vol_breakout_short",
+        )
         return dataframe
 
     def populate_exit_trend(self, dataframe: pd.DataFrame, metadata: dict) -> pd.DataFrame:

@@ -18,6 +18,8 @@ import pandas as pd
 from freqtrade.persistence import Trade
 from freqtrade.strategy import IStrategy
 
+from context_data import add_optional_context
+
 
 class LiquidationWickReversionStrategy(IStrategy):
     INTERFACE_VERSION = 3
@@ -35,6 +37,7 @@ class LiquidationWickReversionStrategy(IStrategy):
     ignore_roi_if_entry_signal = False
 
     def populate_indicators(self, dataframe: pd.DataFrame, metadata: dict) -> pd.DataFrame:
+        dataframe = add_optional_context(dataframe, metadata.get("pair"), self.timeframe)
         close = dataframe["close"]
         high = dataframe["high"]
         low = dataframe["low"]
@@ -88,6 +91,8 @@ class LiquidationWickReversionStrategy(IStrategy):
             & dataframe["atr"].notna()
             & dataframe["ema_slow"].notna()
             & (dataframe["volume"] > 0)
+            & ~dataframe["ctx_stress_block"]
+            & dataframe["ctx_funding_neutral"]
         )
 
         long_flush = (
@@ -110,8 +115,14 @@ class LiquidationWickReversionStrategy(IStrategy):
 
         dataframe.loc[long_flush, "enter_long"] = 1
         dataframe.loc[long_flush, "enter_tag"] = "liq_wick_long"
+        dataframe.loc[long_flush & (dataframe["ctx_loaded"] > 0), "enter_tag"] = (
+            "liq_wick_long_ctx"
+        )
         dataframe.loc[short_flush, "enter_short"] = 1
         dataframe.loc[short_flush, "enter_tag"] = "liq_wick_short"
+        dataframe.loc[short_flush & (dataframe["ctx_loaded"] > 0), "enter_tag"] = (
+            "liq_wick_short_ctx"
+        )
 
         return dataframe
 

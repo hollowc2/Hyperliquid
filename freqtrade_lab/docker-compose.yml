@@ -6,6 +6,10 @@ services:
       - ./user_data:/freqtrade/user_data
     env_file: .env
     environment:
+      - FREQTRADE__api_server__enabled=true
+      - FREQTRADE__api_server__listen_ip_address=0.0.0.0
+      - FREQTRADE__api_server__listen_port=8080
+      - FREQTRADE__api_server__verbosity=error
       - FREQTRADE__api_server__username=${FREQTRADE_API_USER}
       - FREQTRADE__api_server__password=${FREQTRADE_API_PASS}
       - FREQTRADE__api_server__jwt_secret_key=${FREQTRADE_JWT_SECRET}

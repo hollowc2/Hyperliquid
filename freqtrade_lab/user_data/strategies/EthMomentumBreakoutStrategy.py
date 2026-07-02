@@ -14,6 +14,8 @@ import pandas as pd
 import pandas_ta as pta
 from freqtrade.strategy import IStrategy
 
+from context_data import add_optional_context
+
 
 BREAKOUT_WINDOW: int = int(os.environ.get("BREAKOUT_WINDOW", 36))
 EXIT_WINDOW: int = int(os.environ.get("EXIT_WINDOW", 18))
@@ -47,6 +49,7 @@ class EthMomentumBreakoutStrategy(IStrategy):
     trailing_stop = False
 
     def populate_indicators(self, dataframe: pd.DataFrame, metadata: dict) -> pd.DataFrame:
+        dataframe = add_optional_context(dataframe, metadata.get("pair"), self.timeframe)
         dataframe["ema_fast"] = pta.ema(dataframe["close"], length=EMA_FAST)
         dataframe["ema_slow"] = pta.ema(dataframe["close"], length=EMA_SLOW)
         dataframe["atr"] = pta.atr(
@@ -94,18 +97,28 @@ class EthMomentumBreakoutStrategy(IStrategy):
             & fresh_long_breakout
             & volume_confirmed
             & dataframe["atr"].notna()
+            & dataframe["ctx_risk_on_ok"]
+            & dataframe["ctx_funding_neutral"]
         )
         short_mask = (
             short_regime
             & fresh_short_breakout
             & volume_confirmed
             & dataframe["atr"].notna()
+            & dataframe["ctx_risk_off_ok"]
+            & dataframe["ctx_funding_neutral"]
         )
 
         dataframe.loc[long_mask, "enter_long"] = 1
         dataframe.loc[long_mask, "enter_tag"] = "ema_donchian_volume_long"
+        dataframe.loc[long_mask & (dataframe["ctx_loaded"] > 0), "enter_tag"] = (
+            "ema_donchian_volume_long_ctx"
+        )
         dataframe.loc[short_mask, "enter_short"] = 1
         dataframe.loc[short_mask, "enter_tag"] = "ema_donchian_volume_short"
+        dataframe.loc[short_mask & (dataframe["ctx_loaded"] > 0), "enter_tag"] = (
+            "ema_donchian_volume_short_ctx"
+        )
 
         return dataframe
 

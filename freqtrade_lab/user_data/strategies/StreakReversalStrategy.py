@@ -23,6 +23,8 @@ from freqtrade.persistence import Trade
 from freqtrade.strategy import IStrategy, stoploss_from_absolute
 from freqtrade.exchange import timeframe_to_prev_date
 
+from context_data import add_optional_context
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -74,6 +76,7 @@ class StreakReversalStrategy(IStrategy):
     # populate_indicators
     # ------------------------------------------------------------------
     def populate_indicators(self, dataframe: pd.DataFrame, metadata: dict) -> pd.DataFrame:
+        dataframe = add_optional_context(dataframe, metadata.get("pair"), self.timeframe)
         # --- ATR (14-period) and trend EMA ---
         dataframe["atr"] = pta.atr(
             dataframe["high"], dataframe["low"], dataframe["close"], length=14
@@ -133,8 +136,19 @@ class StreakReversalStrategy(IStrategy):
         dataframe["enter_short"] = 0
         dataframe["enter_tag"] = ""
 
-        long_mask = (dataframe["signal"] == 1) & dataframe["atr"].notna()
-        short_mask = (dataframe["signal"] == -1) & dataframe["atr"].notna()
+        stress_ok = ~dataframe["ctx_stress_block"]
+        long_mask = (
+            (dataframe["signal"] == 1)
+            & dataframe["atr"].notna()
+            & stress_ok
+            & dataframe["ctx_funding_neutral"]
+        )
+        short_mask = (
+            (dataframe["signal"] == -1)
+            & dataframe["atr"].notna()
+            & stress_ok
+            & dataframe["ctx_funding_neutral"]
+        )
 
         # No-flip guarantee: don't enter on the same bar that fires a counter-signal exit.
         # A long bar (signal==1) would exit any short; a short bar (signal==-1) would exit any long.
@@ -144,8 +158,14 @@ class StreakReversalStrategy(IStrategy):
 
         dataframe.loc[long_mask, "enter_long"] = 1
         dataframe.loc[long_mask, "enter_tag"] = "streak_reversal_long"
+        dataframe.loc[long_mask & (dataframe["ctx_loaded"] > 0), "enter_tag"] = (
+            "streak_reversal_long_ctx"
+        )
         dataframe.loc[short_mask, "enter_short"] = 1
         dataframe.loc[short_mask, "enter_tag"] = "streak_reversal_short"
+        dataframe.loc[short_mask & (dataframe["ctx_loaded"] > 0), "enter_tag"] = (
+            "streak_reversal_short_ctx"
+        )
 
         return dataframe
 

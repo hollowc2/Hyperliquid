@@ -15,6 +15,8 @@ STOP_ATR_MULT ?= 1.0
 TP_ATR_MULT ?= 1.5
 MAX_POSITION_PCT ?= 0.20
 LEVERAGE ?= 1
+FT_CONTEXT_ENABLED ?= false
+FT_CONTEXT_DIR ?= user_data/data/context
 
 .PHONY: export-data backtest sweep trade
 
@@ -40,6 +42,8 @@ backtest:
 		-e TP_ATR_MULT=$(TP_ATR_MULT) \
 		-e MAX_POSITION_PCT=$(MAX_POSITION_PCT) \
 		-e LEVERAGE=$(LEVERAGE) \
+		-e FT_CONTEXT_ENABLED=$(FT_CONTEXT_ENABLED) \
+		-e FT_CONTEXT_DIR=$(FT_CONTEXT_DIR) \
 		freqtrade backtesting \
 		--config /freqtrade/$(BACKTEST_CONFIG) \
 		--datadir /freqtrade/$(DATA_DIR) \
