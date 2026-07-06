@@ -21,3 +21,32 @@ services:
       --db-url sqlite:////freqtrade/user_data/tradesv3.sqlite
       --config /freqtrade/user_data/config/config.json
       --strategy StreakReversalStrategy
+  hype-paper:
+    image: freqtradeorg/freqtrade:stable
+    restart: unless-stopped
+    volumes:
+      - ./user_data:/freqtrade/user_data
+    env_file: .env
+    environment:
+      - FREQTRADE__api_server__enabled=true
+      - FREQTRADE__api_server__listen_ip_address=0.0.0.0
+      - FREQTRADE__api_server__listen_port=8080
+      - FREQTRADE__api_server__verbosity=error
+      - FREQTRADE__api_server__username=${FREQTRADE_API_USER}
+      - FREQTRADE__api_server__password=${FREQTRADE_API_PASS}
+      - FREQTRADE__api_server__jwt_secret_key=${FREQTRADE_JWT_SECRET}
+      - RPC_PAIR_ALLOWLIST=${RPC_PAIR_ALLOWLIST:-HYPE/USDC:USDC}
+      - RPC_USE_EMA_EXIT=${RPC_USE_EMA_EXIT:-false}
+      - RPC_USE_REGIME_EXIT=${RPC_USE_REGIME_EXIT:-false}
+      - RPC_ATR_TP=${RPC_ATR_TP:-2.5}
+      - RPC_ATR_STOP=${RPC_ATR_STOP:-1.0}
+      - RPC_MAX_HOLD=${RPC_MAX_HOLD:-72}
+      - LEVERAGE=${LEVERAGE:-1}
+    ports:
+      - "127.0.0.1:8081:8080"
+    command: >
+      trade
+      --logfile /freqtrade/user_data/logs/hype-paper.log
+      --db-url sqlite:////freqtrade/user_data/tradesv3-hype-paper.sqlite
+      --config /freqtrade/user_data/config/config.paper.hype.json
+      --strategy RegimePullbackContinuationStrategy

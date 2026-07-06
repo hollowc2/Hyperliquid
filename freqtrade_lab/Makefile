@@ -26,7 +26,7 @@ LEVERAGE ?= 1
 FT_CONTEXT_ENABLED ?= false
 FT_CONTEXT_DIR ?= user_data/data/context
 
-.PHONY: export-data download-coinbase-data proxy-coinbase-data long-data backtest sweep trade
+.PHONY: export-data download-coinbase-data proxy-coinbase-data long-data backtest sweep trade paper-hype
 
 export-data:
 	cd ../hl_engine && uv run python export_freqtrade_ohlcv.py \
@@ -88,3 +88,6 @@ sweep:
 
 trade:
 	docker compose up freqtrade
+
+paper-hype:
+	docker compose up hype-paper
