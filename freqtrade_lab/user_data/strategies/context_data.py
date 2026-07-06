@@ -25,6 +25,12 @@ CONTEXT_ENABLED = os.environ.get("FT_CONTEXT_ENABLED", "false").lower() in {
     "yes",
     "on",
 }
+CONTEXT_REQUIRE = os.environ.get("FT_CONTEXT_REQUIRE", "false").lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 CONTEXT_DIR = os.environ.get("FT_CONTEXT_DIR", "user_data/data/context")
 CONTEXT_MAX_STALENESS_HOURS = int(os.environ.get("FT_CONTEXT_MAX_STALENESS_HOURS", 36))
 CONTEXT_FEAR_MIN = float(os.environ.get("FT_CONTEXT_FEAR_MIN", 20))
@@ -48,6 +54,11 @@ DEFAULT_CONTEXT_COLUMNS: dict[str, float | bool] = {
     "ctx_vix_ret_1d": 0.0,
     "ctx_fred_liquidity_z": 0.0,
     "ctx_funding_rate": 0.0,
+    "ctx_basis_pct": 0.0,
+    "ctx_basis_z": 0.0,
+    "ctx_funding_8h_mean": 0.0,
+    "ctx_funding_24h_mean": 0.0,
+    "ctx_funding_z": 0.0,
     "ctx_risk_on_ok": True,
     "ctx_risk_off_ok": True,
     "ctx_stress_block": False,
@@ -65,6 +76,8 @@ SOURCE_FILES = {
     "hyperliquid": ("hyperliquid.csv", "hyperliquid.json", "hyperliquid.parquet"),
     "context": ("context.csv", "context.json", "context.parquet"),
 }
+
+_WARNED_CONTEXT_MISSING: set[str] = set()
 
 
 def add_optional_context(
@@ -87,14 +100,22 @@ def add_optional_context(
 
     context = load_context_dataframe(pair=pair, timeframe=timeframe)
     if context.empty:
+        _warn_missing_context_once(pair=pair, timeframe=timeframe)
         return dataframe
 
-    base = dataframe.assign(_ctx_row_order=np.arange(len(dataframe))).sort_values("date")
-    context = context.sort_values("date")
+    base = dataframe.assign(_ctx_row_order=np.arange(len(dataframe))).copy()
+    base["_ctx_date"] = (
+        pd.to_datetime(base["date"], utc=True).dt.tz_convert(None).astype("datetime64[ns]")
+    )
+    context = context.copy()
+    context["_ctx_date"] = (
+        pd.to_datetime(context["date"], utc=True).dt.tz_convert(None).astype("datetime64[ns]")
+    )
+    context = context.drop(columns=["date"])
     merged = pd.merge_asof(
-        base,
-        context,
-        on="date",
+        base.sort_values("_ctx_date"),
+        context.sort_values("_ctx_date"),
+        on="_ctx_date",
         direction="backward",
         tolerance=pd.Timedelta(hours=CONTEXT_MAX_STALENESS_HOURS),
         suffixes=("", "_ctx_file"),
@@ -107,9 +128,25 @@ def add_optional_context(
             merged = merged.drop(columns=[file_column])
 
     _finalize_context_flags(merged)
-    merged = merged.sort_values("_ctx_row_order").drop(columns=["_ctx_row_order"])
+    merged = merged.sort_values("_ctx_row_order").drop(columns=["_ctx_row_order", "_ctx_date"])
     merged.index = dataframe.index
     return merged
+
+
+def _warn_missing_context_once(pair: str | None, timeframe: str | None) -> None:
+    if not CONTEXT_REQUIRE:
+        return
+    key = f"{pair or '<unknown>'}:{timeframe or '<unknown>'}:{CONTEXT_DIR}"
+    if key in _WARNED_CONTEXT_MISSING:
+        return
+    _WARNED_CONTEXT_MISSING.add(key)
+    logger.warning(
+        "Context is required but no rows were loaded for pair=%s timeframe=%s from %s; "
+        "ctx_loaded remains 0 and context-gated strategies will not enter.",
+        pair,
+        timeframe,
+        CONTEXT_DIR,
+    )
 
 
 def load_context_dataframe(
@@ -224,6 +261,11 @@ def _normalize_context_frame(frame: pd.DataFrame, source: str) -> pd.DataFrame:
         "vix": ("vix", "^vix", "vix_close"),
         "fred_liquidity": ("fred_liquidity", "walcl", "rrp", "liquidity"),
         "funding_rate": ("funding_rate", "funding", "predicted_funding_rate"),
+        "basis_pct": ("basis_pct", "perp_spot_basis_pct", "hl_spot_basis_pct"),
+        "basis_z": ("basis_z", "perp_spot_basis_z", "hl_spot_basis_z"),
+        "funding_8h_mean": ("funding_8h_mean", "funding_mean_8h", "funding_8h"),
+        "funding_24h_mean": ("funding_24h_mean", "funding_mean_24h", "funding_24h"),
+        "funding_z": ("funding_z", "funding_rate_z", "funding_zscore"),
     }
 
     normalized = pd.DataFrame({"date": frame["date"]})
@@ -240,6 +282,16 @@ def _normalize_context_frame(frame: pd.DataFrame, source: str) -> pd.DataFrame:
         normalized["ctx_fear_greed"] = normalized["fear_greed"]
     if "funding_rate" in normalized.columns:
         normalized["ctx_funding_rate"] = normalized["funding_rate"]
+    if "basis_pct" in normalized.columns:
+        normalized["ctx_basis_pct"] = normalized["basis_pct"]
+    if "basis_z" in normalized.columns:
+        normalized["ctx_basis_z"] = normalized["basis_z"]
+    if "funding_8h_mean" in normalized.columns:
+        normalized["ctx_funding_8h_mean"] = normalized["funding_8h_mean"]
+    if "funding_24h_mean" in normalized.columns:
+        normalized["ctx_funding_24h_mean"] = normalized["funding_24h_mean"]
+    if "funding_z" in normalized.columns:
+        normalized["ctx_funding_z"] = normalized["funding_z"]
 
     _add_returns(normalized, "btc_close", "ctx_btc_ret_1h", periods=12)
     _add_returns(normalized, "btc_close", "ctx_btc_ret_1d", periods=288)
@@ -321,7 +373,6 @@ def _finalize_context_flags(dataframe: pd.DataFrame) -> None:
         | (dataframe["ctx_stablecoin_mcap_ret_1d"].fillna(0) < CONTEXT_STABLECOIN_MIN_CHG_1D)
         | (dataframe["ctx_vix_ret_1d"].fillna(0) > CONTEXT_VIX_MAX_CHG_1D)
     )
-    dataframe["ctx_funding_neutral"] = (
-        dataframe["ctx_funding_rate"].fillna(0).abs() <= CONTEXT_FUNDING_ABS_MAX
-    )
+    funding_abs = dataframe[["ctx_funding_rate", "ctx_funding_8h_mean"]].abs().max(axis=1)
+    dataframe["ctx_funding_neutral"] = funding_abs.fillna(0) <= CONTEXT_FUNDING_ABS_MAX
     dataframe["ctx_loaded"] = dataframe["ctx_loaded"].fillna(0.0)

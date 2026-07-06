@@ -80,6 +80,11 @@ dxy -> ctx_dxy_ret_1d
 vix -> ctx_vix_ret_1d
 fred_liquidity / walcl -> ctx_fred_liquidity_z
 funding_rate -> ctx_funding_rate
+basis_pct -> ctx_basis_pct
+basis_z -> ctx_basis_z
+funding_8h_mean -> ctx_funding_8h_mean
+funding_24h_mean -> ctx_funding_24h_mean
+funding_z -> ctx_funding_z
 ```
 
 Current strategy examples use the context conservatively:
@@ -95,6 +100,47 @@ StreakReversalStrategy and LiquidationWickReversionStrategy:
 With `FT_CONTEXT_ENABLED=false`, or with no context files present, all of those
 flags default to pass-through values and historical OHLCV-only backtests are
 unchanged.
+
+Build pair-specific Hyperliquid funding and Coinbase spot basis context:
+
+```bash
+cd ../hl_engine
+HL_RECORD_COINS=ETH HL_INTERVAL=5m uv run python build_historical_catalog.py
+
+cd ../freqtrade_lab
+make export-data COIN=ETH TIMEFRAME=5m
+make download-coinbase-data SYMBOLS=ETH PAIRS=ETH/USD TIMEFRAMES=5m
+make funding-context COIN=ETH TIMEFRAME=5m FUNDING_CATALOG=../hl_engine/data/catalog
+```
+
+This writes `user_data/data/context/ETH_USDC_USDC_5m.csv`, which is loaded only
+when `FT_CONTEXT_ENABLED=true`.
+
+Backtest the funding/basis strategy:
+
+```bash
+cd ../freqtrade_lab
+make backtest STRATEGY=FundingBasisCarryStrategy FT_CONTEXT_ENABLED=true
+```
+
+Run the funding/basis strategy as its own dry-run paper container:
+
+```bash
+cd ../freqtrade_lab
+make paper-funding-carry
+```
+
+The service uses `user_data/config/config.paper.funding-carry.json`, writes to
+`user_data/logs/funding-carry-paper.log`, stores paper trades in
+`user_data/tradesv3-funding-carry-paper.sqlite`, and exposes its API on
+`127.0.0.1:8082`.
+
+Open the existing `hype-paper` FreqUI at `http://127.0.0.1:8081` and add the
+funding carry bot as another connection with API URL `http://127.0.0.1:8082`.
+
+If the context file is absent or `FT_CONTEXT_ENABLED=false`, the strategy still
+runs offline and simply has no funding/basis entries because those fields default
+to neutral zero values.
 
 Run dry/live trading with `user_data/config/config.json`:
 

@@ -25,8 +25,11 @@ MAX_POSITION_PCT ?= 0.20
 LEVERAGE ?= 1
 FT_CONTEXT_ENABLED ?= false
 FT_CONTEXT_DIR ?= user_data/data/context
+FUNDING_CATALOG ?= ../hl_engine/data/catalog
+FUNDING_CSV ?= $(FUNDING_CATALOG)/funding/$(COIN).csv
+FUNDING_PAIR ?= $(COIN)/USDC:USDC
 
-.PHONY: export-data download-coinbase-data proxy-coinbase-data long-data backtest sweep trade paper-hype
+.PHONY: export-data download-coinbase-data proxy-coinbase-data funding-context long-data backtest sweep trade paper-hype paper-funding-carry
 
 export-data:
 	cd ../hl_engine && uv run python export_freqtrade_ohlcv.py \
@@ -57,6 +60,16 @@ proxy-coinbase-data:
 		--dest-dir $(HLPROXY_DATA_DIR) \
 		--symbols $(SYMBOLS) \
 		--timeframes $(TIMEFRAMES)
+
+funding-context:
+	cd ../hl_engine && uv run python ../freqtrade_lab/scripts/build_funding_basis_context.py \
+		--coin $(COIN) \
+		--pair "$(FUNDING_PAIR)" \
+		--timeframe $(TIMEFRAME) \
+		--hyperliquid-data ../freqtrade_lab/$(DATA_DIR)/futures/$(COIN)_USDC_USDC-$(TIMEFRAME)-futures.json \
+		--funding-csv $(FUNDING_CSV) \
+		--spot-data ../freqtrade_lab/$(COINBASE_DATA_DIR)/$(COIN)_USD-$(TIMEFRAME).json \
+		--output-dir ../freqtrade_lab/$(FT_CONTEXT_DIR)
 
 long-data: download-coinbase-data proxy-coinbase-data
 
@@ -91,3 +104,6 @@ trade:
 
 paper-hype:
 	docker compose up hype-paper
+
+paper-funding-carry:
+	docker compose up funding-carry-paper

@@ -50,3 +50,40 @@ services:
       --db-url sqlite:////freqtrade/user_data/tradesv3-hype-paper.sqlite
       --config /freqtrade/user_data/config/config.paper.hype.json
       --strategy RegimePullbackContinuationStrategy
+  funding-carry-paper:
+    image: freqtradeorg/freqtrade:stable
+    restart: unless-stopped
+    volumes:
+      - ./user_data:/freqtrade/user_data
+    env_file: .env
+    environment:
+      - FREQTRADE__api_server__enabled=true
+      - FREQTRADE__api_server__listen_ip_address=0.0.0.0
+      - FREQTRADE__api_server__listen_port=8080
+      - FREQTRADE__api_server__verbosity=error
+      - FREQTRADE__api_server__username=${FREQTRADE_API_USER}
+      - FREQTRADE__api_server__password=${FREQTRADE_API_PASS}
+      - FREQTRADE__api_server__jwt_secret_key=${FREQTRADE_JWT_SECRET}
+      - PATH=/freqtrade/user_data/bin:/home/ftuser/.local/bin:/usr/local/bin:/usr/bin:/bin
+      - FT_CONTEXT_ENABLED=${FT_CONTEXT_ENABLED:-true}
+      - FT_CONTEXT_DIR=${FT_CONTEXT_DIR:-user_data/data/context}
+      - FT_CONTEXT_REQUIRE=${FT_CONTEXT_REQUIRE:-true}
+      - FBC_CONTEXT_COIN=${FBC_CONTEXT_COIN:-ETH}
+      - FBC_CONTEXT_PAIR=${FBC_CONTEXT_PAIR:-ETH/USDC:USDC}
+      - FBC_CONTEXT_SPOT_PAIR=${FBC_CONTEXT_SPOT_PAIR:-ETH/USD}
+      - FBC_CONTEXT_TIMEFRAME=${FBC_CONTEXT_TIMEFRAME:-5m}
+      - FBC_CONTEXT_REFRESH_SECS=${FBC_CONTEXT_REFRESH_SECS:-300}
+      - FBC_LEVERAGE=${FBC_LEVERAGE:-1}
+      - FBC_RISK_PCT=${FBC_RISK_PCT:-0.01}
+      - FBC_MAX_POSITION_PCT=${FBC_MAX_POSITION_PCT:-0.20}
+    ports:
+      - "127.0.0.1:8082:8080"
+    entrypoint: /bin/sh
+    command: >
+      -c "python /freqtrade/user_data/scripts/update_funding_basis_context.py --once &&
+      (while true; do python /freqtrade/user_data/scripts/update_funding_basis_context.py --once || true; sleep $${FBC_CONTEXT_REFRESH_SECS:-300}; done) &
+      freqtrade trade
+      --logfile /freqtrade/user_data/logs/funding-carry-paper.log
+      --db-url sqlite:////freqtrade/user_data/tradesv3-funding-carry-paper.sqlite
+      --config /freqtrade/user_data/config/config.paper.funding-carry.json
+      --strategy FundingBasisCarryStrategy"

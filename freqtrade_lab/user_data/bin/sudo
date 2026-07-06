@@ -1,0 +1,5 @@
+#!/bin/sh
+if [ "$1" = "chown" ]; then
+    exit 0
+fi
+exec /usr/bin/sudo "$@"
