@@ -54,3 +54,5 @@ Thumbs.db
 
 # Git worktrees
 .worktrees/
+portfolio_cache.json
+wallet_tracker/cache/
